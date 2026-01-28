@@ -1,0 +1,45 @@
+# AI Browser Assistant Configuration
+
+# API Configuration
+zai:
+  api_key: "${ZAI_API_KEY}"
+  base_url: "${ZAI_BASE_URL:-https://api.z.ai/v1}"
+  model: "${ZAI_MODEL:-zlm-4.5-flash}"
+
+# Browser Configuration
+browser:
+  headless: true
+  user_data_dir: "${USER_DATA_DIR:-./user-data}"
+  window_size: [1280, 720]
+  page_timeout: 30s
+  element_timeout: 10s
+
+# Agent Configuration
+agent:
+  max_retries: 3
+  retry_delay: 2s
+  verbose: "${DEBUG:-false}"
+  
+  # Context Management
+  max_context_tokens: 4000
+  chunk_size: 1000
+  summary_threshold: 2000
+
+# Logging Configuration
+logging:
+  level: "${DEBUG:-info}"
+  format: json
+  output: stdout
+  file_output: "logs/agent.log"
+  max_size: 100
+  max_backups: 10
+  max_age: 30
+
+# Extraction Configuration
+extraction:
+  strategies:
+    - full
+    - summary
+    - selective
+  token_budget: 4000
+  preserve_links: true
