@@ -22,8 +22,8 @@ type Extractor struct {
 
 func New(page *rod.Page, log *logger.Logger) *Extractor {
 	return &Extractor{
-		page:    page,
-		logger:  log,
+		page:   page,
+		logger: log,
 	}
 }
 
@@ -101,7 +101,7 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
     return { elements: results, hasModal: hasModal };
 }`
 
-	res  := e.page.MustEval(jsCode)
+	res := e.page.MustEval(jsCode)
 
 	var result struct {
 		Elements []struct {
@@ -122,13 +122,13 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 	}
 
 	pageState := &types.PageState{
-		Title:      title,
-		URL:        url,
-		Elements:   []types.PageElement{},
-		Timestamp:  time.Now(),
-		IsLoading:  false,
-		ScrollY:    0,
-		Viewport:   struct {
+		Title:     title,
+		URL:       url,
+		Elements:  []types.PageElement{},
+		Timestamp: time.Now(),
+		IsLoading: false,
+		ScrollY:   0,
+		Viewport: struct {
 			Width  int
 			Height int
 		}{
@@ -151,8 +151,8 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 				"type":        elem.InputType,
 				"href":        elem.Href,
 			},
-			Clickable:   true,
-			Visible:     true,
+			Clickable:     true,
+			Visible:       true,
 			DiscoveryTime: time.Now(),
 		}
 

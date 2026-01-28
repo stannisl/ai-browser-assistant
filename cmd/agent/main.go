@@ -23,9 +23,10 @@ import (
 func main() {
 	apiKey := flag.String("api-key", os.Getenv("ZAI_API_KEY"), "Z.AI API key")
 	baseURL := flag.String("base-url", getEnvOrDefault("ZAI_BASE_URL", "https://api.z.ai/v1"), "API base URL")
-	model := flag.String("model", getEnvOrDefault("ZAI_MODEL", "zlm-4.5-flash"), "Model name")
+	model := flag.String("model", getEnvOrDefault("ZAI_MODEL", "glm-4.5-flash"), "Model name")
 	userDataDir := flag.String("user-data", getEnvOrDefault("USER_DATA_DIR", "./user-data"), "Browser session directory")
 	debug := flag.Bool("debug", os.Getenv("DEBUG") == "true", "Enable debug logging")
+
 	flag.Parse()
 
 	if *apiKey == "" {
@@ -60,12 +61,12 @@ func main() {
 	defer browserMgr.Close()
 
 	llmCfg := &types.LLMConfig{
-		APIKey:       *apiKey,
-		BaseURL:      *baseURL,
-		Model:        *model,
-		MaxTokens:    4000,
-		Temperature:  0.7,
-		MaxRetries:   3,
+		APIKey:         *apiKey,
+		BaseURL:        *baseURL,
+		Model:          *model,
+		MaxTokens:      4000,
+		Temperature:    0.7,
+		MaxRetries:     3,
 		RequestTimeout: 60 * time.Second,
 	}
 	llmClient, err := llm.NewClient(llmCfg, log)
@@ -77,15 +78,15 @@ func main() {
 	ext := extractor.New(browserMgr.GetPage(), log)
 
 	agentCfg := &types.AgentConfig{
-		MaxRetries:      3,
-		Timeout:         30 * time.Second,
-		SecurityEnabled: true,
+		MaxRetries:           3,
+		Timeout:              30 * time.Second,
+		SecurityEnabled:      true,
 		ConfirmationRequired: true,
-		ContextBudget:    4000,
-		ContextWindow:    8000,
-		SummaryEnabled:   false,
-		SummarizeEvery:   0,
-		MaxSteps:         50,
+		ContextBudget:        4000,
+		ContextWindow:        8000,
+		SummaryEnabled:       false,
+		SummarizeEvery:       0,
+		MaxSteps:             50,
 	}
 	ag := agent.New(browserMgr, ext, llmClient, log, agentCfg)
 
@@ -93,6 +94,7 @@ func main() {
 	fmt.Println("🤖 Browser AI Agent v1.0")
 	fmt.Printf("🌐 Браузер запущен (сессия: %s)\n", *userDataDir)
 	fmt.Printf("🧠 Модель: %s\n", *model)
+	fmt.Printf("🌐 baseURL Api модели: %s\n", *baseURL)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println()
 

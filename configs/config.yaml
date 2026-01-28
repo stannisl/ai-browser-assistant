@@ -3,7 +3,7 @@
 # API Configuration
 zai:
   api_key: "${ZAI_API_KEY}"
-  base_url: "${ZAI_BASE_URL:-https://api.z.ai/v1}"
+  base_url: "${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}"
   model: "${ZAI_MODEL:-zlm-4.5-flash}"
 
 # Browser Configuration

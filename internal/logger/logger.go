@@ -10,16 +10,16 @@ import (
 )
 
 var (
-	infoColor = color.New(color.FgCyan)
-	debugColor = color.New(color.FgGreen)
-	errorColor = color.New(color.FgRed)
-	warnColor = color.New(color.FgYellow)
-	successColor = color.New(color.FgGreen)
-	errorMsgColor = color.New(color.FgWhite, color.Bold)
+	infoColor       = color.New(color.FgCyan)
+	debugColor      = color.New(color.FgGreen)
+	errorColor      = color.New(color.FgRed)
+	warnColor       = color.New(color.FgYellow)
+	successColor    = color.New(color.FgGreen)
+	errorMsgColor   = color.New(color.FgWhite, color.Bold)
 	successMsgColor = color.New(color.FgGreen, color.Bold)
-	stepColor = color.New(color.FgMagenta)
-	toolColor = color.New(color.FgBlue)
-	thinkColor = color.New(color.FgYellow)
+	stepColor       = color.New(color.FgMagenta)
+	toolColor       = color.New(color.FgBlue)
+	thinkColor      = color.New(color.FgYellow)
 )
 
 type Logger struct {

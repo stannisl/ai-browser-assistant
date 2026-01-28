@@ -21,10 +21,10 @@ type Agent struct {
 	logger    *logger.Logger
 	config    *types.AgentConfig
 
-	messages        []openai.ChatCompletionMessage
-	step            int
-	lastToolName    string
-	sameToolCount   int
+	messages      []openai.ChatCompletionMessage
+	step          int
+	lastToolName  string
+	sameToolCount int
 }
 
 func New(
@@ -63,6 +63,7 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 		case <-ctx.Done():
 			return types.ErrContextCanceled
 		default:
+			time.Sleep(200 * time.Millisecond)
 		}
 
 		a.step++
@@ -95,8 +96,8 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 		}
 
 		a.messages = append(a.messages, openai.ChatCompletionMessage{
-			Role:       openai.ChatMessageRoleAssistant,
-			ToolCalls:  response.Choices[0].Message.ToolCalls,
+			Role:      openai.ChatMessageRoleAssistant,
+			ToolCalls: response.Choices[0].Message.ToolCalls,
 		})
 
 		result, err := a.executeTool(ctx, toolCall)
