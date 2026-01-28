@@ -31,7 +31,12 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 	e.counter = 0
 	e.selectors = sync.Map{}
 
-	url := e.page.MustElement("html").MustProperty("location.href").String()
+	var url string
+	if info, err := e.page.Info(); err == nil && info != nil {
+		url = info.URL
+	} else {
+		url = e.page.MustElement("html").MustProperty("location.href").String()
+	}
 	title := e.page.MustElement("html").MustProperty("title").String()
 
 	jsCode := `() => {
@@ -135,6 +140,7 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 			Width:  1920,
 			Height: 1080,
 		},
+		HasModal: result.HasModal,
 	}
 
 	for _, elem := range result.Elements {
@@ -188,45 +194,31 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 
 	builder.WriteString(fmt.Sprintf("Page: %s\n", state.Title))
 	builder.WriteString(fmt.Sprintf("URL: %s\n\n", state.URL))
+
 	builder.WriteString("[Interactive Elements]\n")
-
 	for i, elem := range state.Elements {
-		elemID := i
-		selector, err := e.GetSelector(elemID)
-		if err != nil {
-			continue
-		}
-
-		var line strings.Builder
-		line.WriteString(fmt.Sprintf("[%d] %s", i, elem.Tag))
+		line := fmt.Sprintf("[%d] %s", i, elem.Tag)
 
 		if len(elem.Text) > 0 {
-			line.WriteString(fmt.Sprintf(" \"%s\"", elem.Text))
+			line += fmt.Sprintf(" \"%s\"", elem.Text)
 		}
-
 		if len(elem.Attributes["placeholder"]) > 0 {
-			line.WriteString(fmt.Sprintf(" placeholder=\"%s\"", elem.Attributes["placeholder"]))
+			line += fmt.Sprintf(" placeholder=\"%s\"", elem.Attributes["placeholder"])
+		}
+		if len(elem.Attributes["aria-label"]) > 0 && len(elem.Text) == 0 {
+			line += fmt.Sprintf(" aria-label=\"%s\"", elem.Attributes["aria-label"])
+		}
+		if len(elem.Attributes["type"]) > 0 && elem.Tag == "input" {
+			line += fmt.Sprintf(" type=\"%s\"", elem.Attributes["type"])
+		}
+		if elem.Tag == "a" && len(elem.Attributes["href"]) > 0 {
+			line += fmt.Sprintf(" → %s", elem.Attributes["href"])
 		}
 
-		if len(elem.Attributes["type"]) > 0 {
-			line.WriteString(fmt.Sprintf(" type=\"%s\"", elem.Attributes["type"]))
-		}
-
-		if len(elem.Attributes["aria-label"]) > 0 {
-			line.WriteString(fmt.Sprintf(" aria-label=\"%s\"", elem.Attributes["aria-label"]))
-		}
-
-		if len(selector) > 0 {
-			line.WriteString(fmt.Sprintf(" → %s", selector))
-		}
-
-		builder.WriteString(line.String())
-		builder.WriteString("\n")
+		builder.WriteString(line + "\n")
 	}
 
-	builder.WriteString("\n[Page Info]\n")
-	builder.WriteString(fmt.Sprintf("Total elements: %d\n", len(state.Elements)))
-	builder.WriteString(fmt.Sprintf("Modal active: %s\n", boolToString(state.Scripts != nil)))
+	builder.WriteString(fmt.Sprintf("\n[Page Info]\nElements: %d\n", len(state.Elements)))
 
 	return builder.String()
 }

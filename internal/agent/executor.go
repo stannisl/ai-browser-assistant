@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -32,49 +33,51 @@ func (a *Agent) executeNavigate(ctx context.Context, arguments map[string]interf
 	return fmt.Sprintf("Navigated to %s", url), nil
 }
 
-func (a *Agent) executeClick(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	id, ok := arguments["element_id"].(float64)
-	if !ok {
-		return "", fmt.Errorf("invalid element_id argument")
+func (a *Agent) executeClick(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		ElementID int `json:"element_id"`
 	}
 
-	selector, err := a.extractor.GetSelector(int(id))
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("parse click input: %w, raw: %s", err, string(input))
+	}
+
+	selector, err := a.extractor.GetSelector(params.ElementID)
 	if err != nil {
-		return "", fmt.Errorf("element [%d] not found", int(id))
+		return "", fmt.Errorf("element [%d] not found in current page state", params.ElementID)
 	}
 
-	a.logger.Click(int(id), selector)
+	a.logger.Click(params.ElementID, selector)
 
 	if err := a.browser.Click(ctx, selector); err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Clicked element [%d]", int(id)), nil
+	return fmt.Sprintf("Clicked element [%d]", params.ElementID), nil
 }
 
-func (a *Agent) executeTypeText(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	id, ok := arguments["element_id"].(float64)
-	if !ok {
-		return "", fmt.Errorf("invalid element_id argument")
+func (a *Agent) executeTypeText(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		ElementID int    `json:"element_id"`
+		Text      string `json:"text"`
 	}
 
-	text, ok := arguments["text"].(string)
-	if !ok {
-		return "", fmt.Errorf("invalid text argument")
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("parse type text input: %w, raw: %s", err, string(input))
 	}
 
-	selector, err := a.extractor.GetSelector(int(id))
+	selector, err := a.extractor.GetSelector(params.ElementID)
 	if err != nil {
-		return "", fmt.Errorf("element [%d] not found", int(id))
+		return "", fmt.Errorf("element [%d] not found in current page state", params.ElementID)
 	}
 
-	a.logger.Type(int(id), text)
+	a.logger.Type(params.ElementID, params.Text)
 
-	if err := a.browser.Type(ctx, selector, text); err != nil {
+	if err := a.browser.Type(ctx, selector, params.Text); err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Typed '%s' into element [%d]", text, int(id)), nil
+	return fmt.Sprintf("Typed '%s' into element [%d]", params.Text, params.ElementID), nil
 }
 
 func (a *Agent) executeScroll(ctx context.Context, arguments map[string]interface{}) (string, error) {

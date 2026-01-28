@@ -32,6 +32,7 @@ type PageState struct {
 		Width  int
 		Height int
 	}
+	HasModal bool
 }
 
 type FormElement struct {
