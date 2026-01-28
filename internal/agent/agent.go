@@ -80,7 +80,8 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 
 		if !hasToolCall {
 			if len(response.Choices) > 0 {
-				a.messages = append(a.messages, response.Choices[0].Message)
+				msg := response.Choices[0].Message
+				a.messages = append(a.messages, msg)
 			}
 			continue
 		}
@@ -97,27 +98,55 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 			a.sameToolCount = 1
 		}
 
-		a.messages = append(a.messages, openai.ChatCompletionMessage{
-			Role:      openai.ChatMessageRoleAssistant,
-			ToolCalls: response.Choices[0].Message.ToolCalls,
-		})
+		msg := response.Choices[0].Message
 
-		result, err := a.executeTool(ctx, toolCall)
-
-		toolResultContent := result
-		if err != nil {
-			toolResultContent = fmt.Sprintf("Error: %v", err)
+		if len(msg.ToolCalls) > 0 {
+			msg.ToolCalls = nil
+			a.messages = append(a.messages, msg)
+		} else {
+			a.messages = append(a.messages, msg)
 		}
 
-		a.messages = append(a.messages, openai.ChatCompletionMessage{
-			Role:       openai.ChatMessageRoleTool,
-			ToolCallID: toolCall.ID,
-			Content:    toolResultContent,
-		})
+		var firstErr error
+		var lastResult string
 
-		if toolCall.ToolName == "report" {
-			a.logger.Done(result, err == nil)
-			return nil
+		for _, tc := range toolCall.ToolCalls {
+			a.logger.Tool(tc.ToolName)
+
+			if tc.ToolName == a.lastToolName {
+				a.sameToolCount++
+				if a.sameToolCount >= 3 {
+					a.logger.Warn("Possible loop detected", "tool", tc.ToolName, "count", a.sameToolCount)
+				}
+			} else {
+				a.lastToolName = tc.ToolName
+				a.sameToolCount = 1
+			}
+
+			result, err := a.executeTool(ctx, &tc)
+			lastResult = result
+
+			toolResultContent := result
+			if err != nil && firstErr == nil {
+				firstErr = err
+				toolResultContent = fmt.Sprintf("Error: %v", err)
+			}
+
+			a.messages = append(a.messages, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				ToolCallID: tc.ID,
+				Content:    toolResultContent,
+			})
+
+			if tc.ToolName == "report" {
+				a.logger.Done(result, err == nil)
+				return nil
+			}
+		}
+
+		if firstErr != nil {
+			a.logger.Done(lastResult, false)
+			return firstErr
 		}
 	}
 
@@ -139,6 +168,24 @@ func (a *Agent) trimHistory() {
 }
 
 func (a *Agent) executeTool(ctx context.Context, tc *types.ToolCall) (string, error) {
+	if len(tc.ToolCalls) > 0 {
+		var results []string
+		var firstErr error
+		
+		for _, tcc := range tc.ToolCalls {
+			result, err := a.executeToolImpl(ctx, &tcc)
+			results = append(results, result)
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		
+		if firstErr != nil {
+			return results[0], firstErr
+		}
+		return results[0], nil
+	}
+	
 	return a.executeToolImpl(ctx, tc)
 }
 

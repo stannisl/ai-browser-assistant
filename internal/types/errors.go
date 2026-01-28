@@ -31,7 +31,7 @@ type ToolExecutionError struct {
 }
 
 func (e *ToolExecutionError) Error() string {
-	return fmt.Sprintf("tool %s execution failed: %w", e.ToolName, e.Error)
+	return fmt.Sprintf("tool %s execution failed: %v", e.ToolName, e.Err.Error())
 }
 
 func (e *ToolExecutionError) Unwrap() error {

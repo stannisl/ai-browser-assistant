@@ -11,6 +11,7 @@ type ToolCall struct {
 	ExecuteTime time.Duration
 	CreatedAt   time.Time
 	CompletedAt *time.Time
+	ToolCalls   []ToolCall
 }
 
 type AgentConfig struct {

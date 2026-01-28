@@ -57,17 +57,22 @@ func (c *Client) ExtractToolCall(response *openai.ChatCompletionResponse) (*type
 		return nil, false
 	}
 
-	tc := choice.Message.ToolCalls[0]
+	var toolCalls []types.ToolCall
+	for _, tc := range choice.Message.ToolCalls {
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			args = map[string]interface{}{}
+		}
 
-	var args map[string]interface{}
-	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		args = map[string]interface{}{}
+		toolCalls = append(toolCalls, types.ToolCall{
+			ID:        tc.ID,
+			ToolName:  tc.Function.Name,
+			Arguments: args,
+		})
 	}
 
 	return &types.ToolCall{
-		ID:        tc.ID,
-		ToolName:  tc.Function.Name,
-		Arguments: args,
+		ToolCalls: toolCalls,
 	}, true
 }
 
