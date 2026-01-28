@@ -20,40 +20,51 @@ func (a *Agent) executeExtractPage(ctx context.Context) (string, error) {
 	return a.extractor.FormatForLLM(state), nil
 }
 
-func (a *Agent) executeNavigate(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	url, ok := arguments["url"].(string)
-	if !ok {
-		return "", fmt.Errorf("invalid URL argument")
+func (a *Agent) executeNavigate(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		URL string `json:"url"`
 	}
-
-	if err := a.browser.Navigate(ctx, url); err != nil {
-		return "", err
+	
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("parse navigate: %w", err)
 	}
-
-	return fmt.Sprintf("Navigated to %s", url), nil
+	
+	a.logger.Navigate(params.URL)
+	
+	if err := a.browser.Navigate(ctx, params.URL); err != nil {
+		a.logger.Error("Navigation failed", err, "url", params.URL)
+		return fmt.Sprintf("Error: navigation to %s failed: %v", params.URL, err), nil
+	}
+	
+	return fmt.Sprintf("Navigated to %s. Call extract_page to see the page.", params.URL), nil
 }
 
 func (a *Agent) executeClick(ctx context.Context, input json.RawMessage) (string, error) {
 	var params struct {
 		ElementID int `json:"element_id"`
 	}
-
+	
 	if err := json.Unmarshal(input, &params); err != nil {
+		a.logger.Error("Failed to parse click input", err)
 		return "", fmt.Errorf("parse click input: %w, raw: %s", err, string(input))
 	}
-
+	
+	a.logger.Debug("Click requested", "element_id", params.ElementID)
+	
 	selector, err := a.extractor.GetSelector(params.ElementID)
 	if err != nil {
-		return "", fmt.Errorf("element [%d] not found in current page state", params.ElementID)
+		a.logger.Error("Element not found", err, "element_id", params.ElementID)
+		return fmt.Sprintf("Error: element [%d] not found. Call extract_page to refresh elements.", params.ElementID), nil
 	}
-
+	
 	a.logger.Click(params.ElementID, selector)
-
+	
 	if err := a.browser.Click(ctx, selector); err != nil {
-		return "", err
+		a.logger.Error("Click failed", err, "selector", selector)
+		return fmt.Sprintf("Error: click on [%d] failed: %v. Try another element.", params.ElementID, err), nil
 	}
-
-	return fmt.Sprintf("Clicked element [%d]", params.ElementID), nil
+	
+	return fmt.Sprintf("Clicked element [%d]. Call extract_page to see the result.", params.ElementID), nil
 }
 
 func (a *Agent) executeTypeText(ctx context.Context, input json.RawMessage) (string, error) {
@@ -61,23 +72,32 @@ func (a *Agent) executeTypeText(ctx context.Context, input json.RawMessage) (str
 		ElementID int    `json:"element_id"`
 		Text      string `json:"text"`
 	}
-
+	
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse type text input: %w, raw: %s", err, string(input))
+		a.logger.Error("Failed to parse type_text input", err)
+		return "", fmt.Errorf("parse type_text: %w, raw: %s", err, string(input))
 	}
-
+	
+	a.logger.Debug("Type text requested", "element_id", params.ElementID, "text", params.Text)
+	
+	if params.Text == "" {
+		return "Error: text is empty. Provide text to type.", nil
+	}
+	
 	selector, err := a.extractor.GetSelector(params.ElementID)
 	if err != nil {
-		return "", fmt.Errorf("element [%d] not found in current page state", params.ElementID)
+		a.logger.Error("Element not found for typing", err, "element_id", params.ElementID)
+		return fmt.Sprintf("Error: element [%d] not found. Call extract_page first.", params.ElementID), nil
 	}
-
+	
 	a.logger.Type(params.ElementID, params.Text)
-
+	
 	if err := a.browser.Type(ctx, selector, params.Text); err != nil {
-		return "", err
+		a.logger.Error("Type failed", err, "selector", selector)
+		return fmt.Sprintf("Error: typing into [%d] failed: %v", params.ElementID, err), nil
 	}
-
-	return fmt.Sprintf("Typed '%s' into element [%d]", params.Text, params.ElementID), nil
+	
+	return fmt.Sprintf("Typed '%s' into element [%d]. Now click search button or press Enter.", params.Text, params.ElementID), nil
 }
 
 func (a *Agent) executeScroll(ctx context.Context, arguments map[string]interface{}) (string, error) {
