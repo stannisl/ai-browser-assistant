@@ -3,6 +3,7 @@ package types
 import "time"
 
 type PageElement struct {
+	ID         int
 	Selector   string
 	Text       string
 	Tag        string
@@ -19,20 +20,25 @@ type PageElement struct {
 }
 
 type PageState struct {
-	Title     string
-	URL       string
-	Elements  []PageElement
-	Scripts   []string
-	Forms     []FormElement
-	Links     []LinkElement
-	Timestamp time.Time
-	IsLoading bool
-	ScrollY   int
-	Viewport  struct {
+	Title        string
+	URL          string
+	Elements     []PageElement
+	Scripts      []string
+	Forms        []FormElement
+	Links        []LinkElement
+	Timestamp    time.Time
+	IsLoading    bool
+	ScrollY      int
+	Viewport     struct {
 		Width  int
 		Height int
 	}
-	HasModal bool
+	HasModal    bool
+	InputCount  int
+	ButtonCount int
+	LinkCount   int
+	ElementCount int
+	Content     string
 }
 
 type FormElement struct {

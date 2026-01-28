@@ -13,6 +13,20 @@ import (
 	"github.com/stannisl/ai-browser-assistant/internal/types"
 )
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 type Extractor struct {
 	page      *rod.Page
 	selectors sync.Map
@@ -127,12 +141,16 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 	}
 
 	pageState := &types.PageState{
-		Title:     title,
-		URL:       url,
-		Elements:  []types.PageElement{},
-		Timestamp: time.Now(),
-		IsLoading: false,
-		ScrollY:   0,
+		Title:        title,
+		URL:          url,
+		Elements:     []types.PageElement{},
+		ElementCount: 0,
+		InputCount:   0,
+		ButtonCount:  0,
+		LinkCount:    0,
+		Timestamp:    time.Now(),
+		IsLoading:    false,
+		ScrollY:      0,
 		Viewport: struct {
 			Width  int
 			Height int
@@ -143,14 +161,22 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		HasModal: result.HasModal,
 	}
 
-	for _, elem := range result.Elements {
+	const maxElements = 50
+	var elements []types.PageElement
+	elementsRaw := result.Elements
+
+	for i, elem := range elementsRaw {
+		if i >= maxElements {
+			break
+		}
 		selectorID := e.counter
 		e.selectors.Store(selectorID, elem.Selector)
 
 		pageElement := types.PageElement{
-			Selector: elem.Selector,
-			Text:     elem.Text,
-			Tag:      elem.Type,
+			ID:         i,
+			Selector:   elem.Selector,
+			Text:       elem.Text,
+			Tag:        elem.Type,
 			Attributes: map[string]string{
 				"placeholder": elem.Placeholder,
 				"aria-label":  elem.AriaLabel,
@@ -166,16 +192,35 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 			pageElement.Attributes["href"] = elem.Href
 		}
 
-		pageState.Elements = append(pageState.Elements, pageElement)
+		pageState.ElementCount++
+		if elem.Type == "input" || elem.Type == "textarea" || elem.Type == "select" {
+			pageState.InputCount++
+		}
+		if elem.Type == "button" || strings.Contains(elem.AriaLabel, "submit") {
+			pageState.ButtonCount++
+		}
+		if elem.Type == "a" {
+			pageState.LinkCount++
+		}
+
+		elements = append(elements, pageElement)
 		e.counter++
 	}
+
+	if len(elementsRaw) > maxElements {
+		pageState.Content = fmt.Sprintf("Showing %d of %d elements", len(elements), len(elementsRaw))
+	} else {
+		pageState.Content = fmt.Sprintf("Showing %d elements", pageState.ElementCount)
+	}
+
+	pageState.Elements = elements
 
 	pageState.Scripts = []string{}
 	pageState.Forms = []types.FormElement{}
 	pageState.Links = []types.LinkElement{}
 
 	if e.logger != nil {
-		e.logger.Extract(url, len(pageState.Elements))
+		e.logger.Extract(url, pageState.ElementCount)
 	}
 
 	return pageState, nil
@@ -195,32 +240,65 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 	builder.WriteString(fmt.Sprintf("Page: %s\n", state.Title))
 	builder.WriteString(fmt.Sprintf("URL: %s\n\n", state.URL))
 
-	builder.WriteString("[Interactive Elements]\n")
-	for i, elem := range state.Elements {
-		line := fmt.Sprintf("[%d] %s", i, elem.Tag)
-
-		if len(elem.Text) > 0 {
-			line += fmt.Sprintf(" \"%s\"", elem.Text)
-		}
-		if len(elem.Attributes["placeholder"]) > 0 {
-			line += fmt.Sprintf(" placeholder=\"%s\"", elem.Attributes["placeholder"])
-		}
-		if len(elem.Attributes["aria-label"]) > 0 && len(elem.Text) == 0 {
-			line += fmt.Sprintf(" aria-label=\"%s\"", elem.Attributes["aria-label"])
-		}
-		if len(elem.Attributes["type"]) > 0 && elem.Tag == "input" {
-			line += fmt.Sprintf(" type=\"%s\"", elem.Attributes["type"])
-		}
-		if elem.Tag == "a" && len(elem.Attributes["href"]) > 0 {
-			line += fmt.Sprintf(" → %s", elem.Attributes["href"])
-		}
-
-		builder.WriteString(line + "\n")
+	if state.HasModal {
+		builder.WriteString("[!!! MODAL WINDOW ACTIVE !!!]\n\n")
 	}
 
-	builder.WriteString(fmt.Sprintf("\n[Page Info]\nElements: %d\n", len(state.Elements)))
+	var inputs, buttons, links, other []types.PageElement
+
+	for _, el := range state.Elements {
+		switch {
+		case el.Tag == "input" || el.Tag == "textarea" || el.Tag == "select":
+			state.InputCount++
+			inputs = append(inputs, el)
+		case el.Tag == "button" || strings.Contains(el.Attributes["aria-label"], "submit"):
+			state.ButtonCount++
+			buttons = append(buttons, el)
+		case el.Tag == "a":
+			state.LinkCount++
+			links = append(links, el)
+		default:
+			other = append(other, el)
+		}
+	}
+
+	builder.WriteString("[Input Fields]\n")
+	for _, el := range inputs {
+		builder.WriteString(e.formatElement(el) + "\n")
+	}
+
+	builder.WriteString("\n[Buttons]\n")
+	for _, el := range buttons {
+		builder.WriteString(e.formatElement(el) + "\n")
+	}
+
+	builder.WriteString("\n[Links - first 20]\n")
+	for i, el := range links {
+		if i >= 20 {
+			break
+		}
+		builder.WriteString(e.formatElement(el) + "\n")
+	}
+
+	builder.WriteString(fmt.Sprintf("\n[Page Info]\nTotal: %d | Shown: %d\n", state.ElementCount, len(inputs)+len(buttons)+min(len(links), 20)))
 
 	return builder.String()
+}
+
+func (e *Extractor) formatElement(el types.PageElement) string {
+	line := fmt.Sprintf("[%d] %s", el.ID, el.Tag)
+
+	if len(el.Text) > 0 {
+		line += fmt.Sprintf(" \"%s\"", truncate(el.Text, 40))
+	}
+	if len(el.Attributes["placeholder"]) > 0 {
+		line += fmt.Sprintf(" placeholder=\"%s\"", truncate(el.Attributes["placeholder"], 25))
+	}
+	if el.Tag == "a" && strings.HasPrefix(el.Attributes["href"], "http") {
+		line += fmt.Sprintf(" → %s", truncate(el.Attributes["href"], 50))
+	}
+
+	return line
 }
 
 func boolToString(b bool) string {

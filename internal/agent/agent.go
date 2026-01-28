@@ -69,6 +69,8 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 		a.step++
 		a.logger.Step(a.step, a.config.MaxSteps)
 
+		a.trimHistory()
+
 		response, err := a.llm.Chat(ctx, a.messages)
 		if err != nil {
 			return fmt.Errorf("llm chat: %w", err)
@@ -120,6 +122,20 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 	}
 
 	return types.ErrMaxStepsExceeded
+}
+
+func (a *Agent) trimHistory() {
+	const maxMessages = 20
+
+	if len(a.messages) <= maxMessages {
+		return
+	}
+
+	preserved := a.messages[:2]
+	recent := a.messages[len(a.messages)-(maxMessages-2):]
+	a.messages = append(preserved, recent...)
+
+	a.logger.Debug("History trimmed", "from", len(a.messages)+len(recent), "to", len(a.messages))
 }
 
 func (a *Agent) executeTool(ctx context.Context, tc *types.ToolCall) (string, error) {
