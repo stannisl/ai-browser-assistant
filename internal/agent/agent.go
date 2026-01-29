@@ -15,16 +15,17 @@ import (
 )
 
 type Agent struct {
-	browser   *browser.Manager
-	extractor *extractor.Extractor
-	llm       *llm.Client
-	logger    *logger.Logger
-	config    *types.AgentConfig
+	browser      *browser.Manager
+	extractor    *extractor.Extractor
+	llm          *llm.Client
+	logger       *logger.Logger
+	config       *types.AgentConfig
 
-	messages      []openai.ChatCompletionMessage
-	step          int
-	lastToolName  string
-	sameToolCount int
+	messages       []openai.ChatCompletionMessage
+	step           int
+	lastToolName   string
+	sameToolCount  int
+	toolCallCounter int
 }
 
 func New(
@@ -55,8 +56,8 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 			Content: task,
 		},
 	}
+	a.toolCallCounter = 0
 	a.lastToolName = ""
-	a.sameToolCount = 0
 
 	for a.step < a.config.MaxSteps {
 		select {
@@ -87,15 +88,11 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 		}
 
 		a.logger.Tool(toolCall.ToolName)
+		a.toolCallCounter++
 
-		if toolCall.ToolName == a.lastToolName {
-			a.sameToolCount++
-			if a.sameToolCount >= 3 {
-				a.logger.Warn("Possible loop detected", "tool", toolCall.ToolName, "count", a.sameToolCount)
-			}
-		} else {
-			a.lastToolName = toolCall.ToolName
-			a.sameToolCount = 1
+		if a.toolCallCounter > 10 {
+			a.logger.Warn("Possible infinite loop detected", "steps", a.toolCallCounter)
+			return types.ErrMaxStepsExceeded
 		}
 
 		msg := response.Choices[0].Message
@@ -111,19 +108,7 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 		var lastResult string
 
 		for _, tc := range toolCall.ToolCalls {
-			a.logger.Tool(tc.ToolName)
-
-			if tc.ToolName == a.lastToolName {
-				a.sameToolCount++
-				if a.sameToolCount >= 3 {
-					a.logger.Warn("Possible loop detected", "tool", tc.ToolName, "count", a.sameToolCount)
-				}
-			} else {
-				a.lastToolName = tc.ToolName
-				a.sameToolCount = 1
-			}
-
-			result, err := a.executeTool(ctx, &tc)
+			result, err := a.ExecuteTool(ctx, &tc)
 			lastResult = result
 
 			toolResultContent := result
@@ -167,13 +152,13 @@ func (a *Agent) trimHistory() {
 	a.logger.Debug("History trimmed", "from", len(a.messages)+len(recent), "to", len(a.messages))
 }
 
-func (a *Agent) executeTool(ctx context.Context, tc *types.ToolCall) (string, error) {
+func (a *Agent) ExecuteTool(ctx context.Context, tc *types.ToolCall) (string, error) {
 	if len(tc.ToolCalls) > 0 {
 		var results []string
 		var firstErr error
 		
 		for _, tcc := range tc.ToolCalls {
-			result, err := a.executeToolImpl(ctx, &tcc)
+			result, err := a.executeToolInternal(ctx, &tcc)
 			results = append(results, result)
 			if err != nil && firstErr == nil {
 				firstErr = err
@@ -186,77 +171,30 @@ func (a *Agent) executeTool(ctx context.Context, tc *types.ToolCall) (string, er
 		return results[0], nil
 	}
 	
-	return a.executeToolImpl(ctx, tc)
+	return a.executeToolInternal(ctx, tc)
 }
 
-func (a *Agent) executeToolImpl(ctx context.Context, tc *types.ToolCall) (string, error) {
+func (a *Agent) executeToolInternal(ctx context.Context, tc *types.ToolCall) (string, error) {
 	switch tc.ToolName {
 	case "extract_page":
-		return a.extractPage(ctx)
+		return a.ExecuteExtractPage(ctx, tc.Arguments)
 	case "navigate":
-		url, ok := tc.Arguments["url"].(string)
-		if !ok {
-			return "", fmt.Errorf("invalid URL argument")
-		}
-		err := a.browser.Navigate(ctx, url)
-		return "", err
+		return a.ExecuteNavigate(ctx, tc.Arguments)
 	case "click":
-		id, ok := tc.Arguments["id"].(float64)
-		if !ok {
-			return "", fmt.Errorf("invalid id argument")
-		}
-		err := a.browser.Click(ctx, fmt.Sprintf("[%d]", int(id)))
-		return "", err
+		return a.ExecuteClick(ctx, tc.Arguments)
 	case "type_text":
-		id, ok := tc.Arguments["id"].(float64)
-		if !ok {
-			return "", fmt.Errorf("invalid id argument")
-		}
-		text, ok := tc.Arguments["text"].(string)
-		if !ok {
-			return "", fmt.Errorf("invalid text argument")
-		}
-		err := a.browser.Type(ctx, fmt.Sprintf("[%d]", int(id)), text)
-		return "", err
+		return a.ExecuteTypeText(ctx, tc.Arguments)
 	case "scroll":
-		direction, ok := tc.Arguments["direction"].(string)
-		if !ok {
-			return "", fmt.Errorf("invalid direction argument")
-		}
-		err := a.browser.Scroll(ctx, direction)
-		return "", err
+		return a.ExecuteScroll(ctx, tc.Arguments)
 	case "wait":
-		seconds, ok := tc.Arguments["seconds"].(float64)
-		if !ok {
-			return "", fmt.Errorf("invalid seconds argument")
-		}
-		time.Sleep(time.Duration(seconds) * time.Second)
-		return fmt.Sprintf("Waited %d seconds", int(seconds)), nil
+		return a.ExecuteWait(ctx, tc.Arguments)
 	case "ask_user":
-		question, ok := tc.Arguments["question"].(string)
-		if !ok {
-			return "", fmt.Errorf("invalid question argument")
-		}
-		return fmt.Sprintf("Question: %s", question), nil
+		return a.ExecuteAskUser(ctx, tc.Arguments)
 	case "confirm_action":
-		return "Confirmation required for this action", nil
+		return a.ExecuteConfirmAction(ctx, tc.Arguments)
 	case "report":
-		result, ok := tc.Arguments["result"].(string)
-		if !ok {
-			result = "Task completed"
-		}
-		return result, nil
+		return a.ExecuteReport(ctx, tc.Arguments)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", tc.ToolName)
 	}
-}
-
-func (a *Agent) extractPage(ctx context.Context) (string, error) {
-	pageState, err := a.extractor.Extract(ctx)
-	if err != nil {
-		return "", fmt.Errorf("extraction failed: %w", err)
-	}
-
-	format := a.extractor.FormatForLLM(pageState)
-	return format, nil
 }

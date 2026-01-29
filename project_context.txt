@@ -1,0 +1,2566 @@
+================================================================================
+FILE: CLAUDE.md
+================================================================================
+# AI Browser Assistant
+
+Autonomous AI agent for browser automation on Go, designed to execute tasks without hardcoded selectors using AI-driven tool calling.
+
+## Project Description
+
+This is an intelligent browser automation system that uses Claude 3.5 Sonnet to autonomously explore web pages, make decisions, and execute actions without requiring hardcoded selectors, manual step definitions, or predefined workflows.
+
+### Core Capabilities
+
+- **Autonomous Exploration**: AI analyzes page structure and determines next actions dynamically
+- **Tool Calling Architecture**: Structured interface for browser operations
+- **Context Management**: Smart extraction strategies to avoid token limits
+- **Security Layer**: Confirmation required for destructive actions
+- **Visible Browser**: GUI mode for debugging and verification
+- **Persistent Sessions**: Maintains browser state across operations
+- **OpenAI-compatible API**: Works with z.ai and any OpenAI-compatible endpoints
+
+### Key Features
+
+- No hardcoded selectors or URLs
+- No predefined task workflows
+- Dynamic decision-making based on AI analysis
+- Context-aware extraction (not sending entire page to LLM)
+- Graceful error handling and retry logic
+- Context propagation for multi-step tasks
+- OpenAI-compatible API support (works with z.ai and any OpenAI endpoint)
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ZAI_API_KEY` | Yes | - | API ключ от z.ai |
+| `ZAI_BASE_URL` | No | https://api.z.ai/v1 | Базовый URL API |
+| `ZAI_MODEL` | No | zlm-4.5-flash | Модель для использования |
+| `USER_DATA_DIR` | No | ./user-data | Директория для сессий браузера |
+| `DEBUG` | No | false | Включить debug логи |
+| `TASK` | No | - | Задача для выполнения (опционально) |
+
+## Technology Stack
+
+- **Language**: Go 1.24
+- **Browser Automation**: Rod (based on Chrome DevTools Protocol)
+- **AI/LLM**: OpenAI-compatible API (z.ai model: zlm-4.5-flash)
+- **Logging**: Zap structured logging
+- **Structure**: Standard Go layout (idiomatic package organization)
+
+## Dependencies
+
+| Dependency | Version | Purpose |
+|------------|---------|---------|
+| `github.com/go-rod/rod` | v0.116.12 | Browser automation via Chrome DevTools Protocol |
+| `github.com/sashabaranov/go-openai` | v1.33.2 | OpenAI-compatible API client (z.ai) |
+| `github.com/sirupsen/zap` | v1.27.0 | Structured logging |
+| `github.com/tmc/langchaingo/textsplitter` | latest | Text chunking and splitting |
+| `github.com/joho/godotenv` | latest | Environment variables loading |
+| `github.com/spf13/viper` | latest | Configuration management |
+
+## Project Structure
+
+```
+ai-browser-assistant/
+├── cmd/
+│   └── agent/
+│       └── main.go                    # Entry point, signal handling, orchestration
+│
+├── internal/
+│   ├── browser/                       # Browser abstraction and management
+│   │   ├── browser.go                 # Browser instance, connections, pooling
+│   │   ├── page.go                    # Page operations (navigate, click, input)
+│   │   ├── navigation.go              # Navigation flow, history, back/forward
+│   │   ├── element.go                 # Element search, selection, caching
+│   │   └── persistence.go             # Persistent sessions, cookies
+│   │
+│   ├── agent/                         # Agent orchestration layer
+│   │   ├── agent.go                   # Main agent logic, tool calling loop
+│   │   ├── context.go                 # Conversation history, page context
+│   │   ├── tools.go                   # Tool definitions, execution
+│   │   ├── security.go                # Security layer, confirmation
+│   │   └── executor.go                # Tool execution dispatcher
+│   │
+│   ├── extractor/                     # Content extraction strategies
+│   │   ├── extractor.go               # Main extractor interface
+│   │   ├── strategies.go              # Extraction strategy implementations
+│   │   ├── context_strategy.go        # Context management strategies
+│   │   ├── token_calculator.go        # Token counting and budgeting
+│   │   ├── page_summarizer.go         # Page summarization
+│   │   └── link_extractor.go          # Link extraction
+│   │
+│   ├── llm/                           # LLM integration
+│   │   ├── client.go                  # OpenAI client wrapper (z.ai API)
+│   │   ├── messages.go                # Message formatting
+│   │   └── prompts.go                 # System prompts
+│   │
+│   ├── types/                         # Shared types
+│   │   ├── browser.go                 # Browser-related types
+│   │   ├── agent.go                   # Agent-related types
+│   │   ├── extractor.go               # Extraction-related types
+│   │   └── errors.go                  # Error types
+│   │
+│   └── logger/                        # Structured logging
+│       └── logger.go                  # Zap logger wrapper
+│
+├── pkg/
+│   └── utils/                         # Shared utilities
+│       └── utils.go                   # Helper functions
+│
+├── configs/
+│   └── config.yaml                    # Configuration file
+│
+├── bin/                               # Compiled binaries
+├── data/                              # Data storage
+├── go.mod                             # Go modules definition
+├── go.sum                             # Dependency checksums
+└── README.md                          # Project documentation
+```
+
+## Common Commands
+
+### Development
+
+```bash
+# Run the agent
+ZAI_API_KEY=your-key go run ./cmd/agent
+
+# Run with custom model
+ZAI_API_KEY=your-key ZAI_MODEL=zlm-4.5-flash go run ./cmd/agent
+
+# Run with specific config
+go run ./cmd/agent --config configs/config.yaml
+
+# Run with debug mode
+DEBUG=true go run ./cmd/agent
+
+# Run with specific config
+go run ./cmd/agent --config configs/config.yaml
+
+# Format code
+gofmt -w .
+
+# Run linter
+golangci-lint run
+
+# Format and lint together
+gofmt -w . && golangci-lint run
+
+# Run tests
+go test ./... -v
+
+# Run tests with coverage
+go test ./... -cover
+
+# Run specific test
+go test ./internal/browser -run TestNavigate -v
+
+# Run benchmarks
+go test ./... -bench=. -benchmem
+```
+
+### Build
+
+```bash
+# Build agent binary
+go build -o bin/agent ./cmd/agent
+
+# Build with optimizations
+go build -o bin/agent -ldflags="-s -w" ./cmd/agent
+
+# Build for specific platform
+GOOS=linux GOARCH=amd64 go build -o bin/agent-linux ./cmd/agent
+GOOS=windows GOARCH=amd64 go build -o bin/agent.exe ./cmd/agent
+GOOS=darwin GOARCH=amd64 go build -o bin/agent-macos ./cmd/agent
+
+# Build with race detector
+go build -race -o bin/agent ./cmd/agent
+
+# Install to PATH
+go install ./cmd/agent
+```
+
+### Dependency Management
+
+```bash
+# Initialize module (if not done)
+go mod init github.com/yourname/ai-browser-assistant
+
+# Download dependencies
+go mod tidy
+
+# Update dependencies
+go get -u ./...
+
+# Update specific dependency
+go get github.com/go-rod/rod@latest
+go get github.com/sashabaranov/go-openai@latest
+
+# Update to minor versions
+go get -u=patch ./...
+
+# View dependencies
+go mod graph
+
+# Verify dependencies
+go mod verify
+```
+
+### Testing
+
+```bash
+# Run all tests
+go test ./...
+
+# Run tests with verbose output
+go test ./... -v
+
+# Run tests with coverage
+go test ./... -cover
+
+# Run tests with coverage and HTML report
+go test ./... -coverprofile=coverage.out
+go tool cover -html=coverage.out -o coverage.html
+
+# Run specific package
+go test ./internal/agent -v
+
+# Run specific test function
+go test ./internal/agent -run TestExecuteTool -v
+
+# Run tests in race condition mode
+go test ./... -race
+
+# Run tests with benchmarks
+go test ./... -bench=. -benchmem
+
+# Run benchmarks with CPU profiling
+go test ./... -bench=. -cpuprofile=cpu.prof
+go tool pprof cpu.prof
+
+# Run tests with memory profiling
+go test ./... -bench=. -memprofile=mem.prof
+go tool pprof mem.prof
+```
+
+## Code Style Guidelines
+
+### Formatting
+
+- Use `gofmt` for all code formatting
+- No manual indentation or spacing
+- Run `gofmt -w .` before committing
+
+### Linting
+
+- Use `golangci-lint` for comprehensive linting
+- Address all warnings and errors
+- Configure `.golangci.yml` for project-specific rules
+
+### Go Conventions
+
+Follow [Effective Go](https://go.dev/doc/effective_go) guidelines:
+
+1. **Naming**: Use PascalCase for exported types, camelCase for exported functions, UPPER_CASE for constants
+2. **Error Handling**: Always check errors, wrap with context using `fmt.Errorf("...: %w", err)`
+3. **Context**: Pass `context.Context` for cancellation and timeout propagation
+4. **Interfaces**: Design interfaces with small sets of methods
+5. **Testing**: Write tests that verify both happy and error paths
+6. **Documentation**: Document exported functions with godoc comments
+7. **Dependency Direction**: Depend on "less" packages, not "more"
+
+### Error Wrapping Pattern
+
+```go
+// Always wrap errors with context
+func (b *Browser) Navigate(url string) error {
+    if !isValidURL(url) {
+        return fmt.Errorf("invalid URL: %s", url)
+    }
+    
+    err := b.page.Navigate(url)
+    if err != nil {
+        return fmt.Errorf("navigation to %s failed: %w", url, err)
+    }
+    
+    // Wait for page to stabilize
+    if err := b.page.WaitForStable(2 * time.Second); err != nil {
+        return fmt.Errorf("page stabilization failed: %w", err)
+    }
+    
+    return nil
+}
+
+// For fatal errors
+if err != nil {
+    return fmt.Errorf("operation '%s' failed: %w", operation, err)
+}
+```
+
+### Context Propagation
+
+```go
+// Always propagate context
+func (a *Agent) Execute(ctx context.Context, task string) (string, error) {
+    // Check context before operations
+    select {
+    case <-ctx.Done():
+        return "", fmt.Errorf("execution canceled: %w", ctx.Err())
+    default:
+    }
+    
+    // Use context in operations
+    result, err := a.llm.Chat(ctx, messages, tools)
+    if err != nil {
+        return "", fmt.Errorf("LLM call failed: %w", err)
+    }
+    
+    // Execute with context
+    err = a.executeTool(ctx, toolCall)
+    if err != nil {
+        return "", fmt.Errorf("tool execution failed: %w", err)
+    }
+    
+    return result, nil
+}
+```
+
+### Interface Design
+
+```go
+// Define small, focused interfaces
+type Browser interface {
+    Open() (*Page, error)
+    Close() error
+    GetCurrentPage() *Page
+    SetPage(page *Page) error
+}
+
+type Page interface {
+    Navigate(url string) error
+    Click(selector string) error
+    Input(selector, text string) error
+    ExtractText(selector string) (string, error)
+}
+
+// Implement with composition
+type RodBrowser struct {
+    browser *rod.Browser
+}
+
+func (rb *RodBrowser) Open() (*Page, error) {
+    page := rb.browser.MustPage("https://example.com")
+    return &RodPage{Page: page}, nil
+}
+```
+
+### Testing Patterns
+
+```go
+// Unit tests with interfaces
+func TestNavigateTool(t *testing.T) {
+    // Arrange
+    mockBrowser := &MockBrowser{}
+    mockLLM := &MockLLM{}
+    agent := NewAgent(mockLLM, mockBrowser)
+    
+    // Act
+    result, err := agent.Execute(context.Background(), "Navigate to example.com")
+    
+    // Assert
+    assert.NoError(t, err)
+    assert.Contains(t, result, "example.com")
+}
+
+// Test error paths
+func TestNavigateError(t *testing.T) {
+    mockBrowser := &MockBrowser{ShouldFail: true}
+    agent := NewAgent(&MockLLM{}, mockBrowser)
+    
+    _, err := agent.Execute(context.Background(), "Navigate")
+    assert.Error(t, err)
+    assert.Contains(t, err.Error(), "navigation failed")
+}
+```
+
+## Critical Constraints
+
+### NEVER Hardcode Selectors
+
+**DO NOT** do this:
+
+```go
+// ❌ BAD - Hardcoded selector
+page.Click("#submit-button")  // Will break on any other site
+page.Input("#email", "test@example.com")
+```
+
+**DO** this:
+
+```go
+// ✅ GOOD - Selector-less or dynamic selection
+// Use AI to determine what to click
+action := llm.Analyze(pageContext)
+page.Click(action.ElementSelector)
+```
+
+### NEVER Hardcode URL Paths
+
+**DO NOT** do this:
+
+```go
+// ❌ BAD - Hardcoded paths
+navigateTo("https://example.com/login")
+navigateTo("https://example.com/cart")
+navigateTo("https://example.com/checkout")
+```
+
+**DO** this:
+
+```go
+// ✅ GOOD - Dynamic URLs or search
+// Let AI determine the URL
+navigateTo(page.SearchFor("login page"))
+navigateTo(searchResults.FirstResult)
+```
+
+### NEVER Create Predefined Task Workflows
+
+**DO NOT** do this:
+
+```go
+// ❌ BAD - Predefined steps
+func OrderFood(task string) {
+    navigateTo("https://eda.yandex.ru")
+    clickElement(".search-button")
+    inputText("#search", task)
+    clickElement(".add-to-cart")
+    // ... more hardcoded steps
+}
+```
+
+**DO** this:
+
+```go
+// ✅ GOOD - AI-driven execution
+func OrderFood(task string) {
+    // Let AI determine the workflow
+    context := extractor.ExtractContext(page)
+    action := llm.DecideNextAction(context, task)
+    
+    // Execute dynamically
+    for {
+        if action.IsComplete() {
+            break
+        }
+        action.Execute()
+        context = extractor.ExtractContext(page)
+        action = llm.DecideNextAction(context, task)
+    }
+}
+```
+
+### Agent Must Investigate and Decide Dynamically
+
+The agent must:
+
+1. **Analyze the page structure** - Extract headings, links, forms, visible text
+2. **Understand the goal** - Process the task description
+3. **Determine next action** - Use LLM to decide what to do
+4. **Execute autonomously** - No predefined step sequences
+5. **Handle errors** - Recover from failures gracefully
+6. **Ask for confirmation** - Before destructive actions
+
+The agent should NEVER:
+- Assume what elements exist on a page
+- Follow a hardcoded workflow for any task
+- Use static selectors unless explicitly found via AI
+- Make assumptions about page layout or structure
+
+### Always Use Interfaces for Testability
+
+```go
+// ❌ BAD - Direct implementation
+func NewAgent(browser *RodBrowser, llm *AnthropicClient) *Agent {
+    return &Agent{browser: browser, llm: llm}
+}
+
+// ✅ GOOD - Interface-based
+type Browser interface {
+    Navigate(url string) error
+    Click(selector string) error
+    // ...
+}
+
+type LLMClient interface {
+    Chat(ctx context.Context, messages []MessageParam, tools []ToolParam) (*LLMResponse, error)
+    // ...
+}
+
+func NewAgent(browser Browser, llm LLMClient) *Agent {
+    return &Agent{browser: browser, llm: llm}
+}
+
+// Easy to mock for testing
+func TestAgent(t *testing.T) {
+    mockBrowser := &MockBrowser{}  // Implements Browser interface
+    mockLLM := &MockLLM{}          // Implements LLMClient interface
+    agent := NewAgent(mockBrowser, mockLLM)
+    // Test...
+}
+```
+
+## Usage Examples
+
+### Example 1: Order Food
+
+```bash
+ZAI_API_KEY=your-key TASK="Order food from Yandex.Eda: I want borsch soup and chicken breast" go run ./cmd/agent
+```
+
+The agent will:
+1. Navigate to Yandex.Eda
+2. Search for borsch soup
+3. Add to cart
+4. Search for chicken breast
+5. Add to cart
+6. Navigate to cart
+7. Confirm order with user
+
+### Example 2: Apply for Jobs
+
+```bash
+ZAI_API_KEY=your-key TASK="Apply to 3 Senior Go Developer positions: I have 5 years of experience" go run ./cmd/agent
+```
+
+The agent will:
+1. Navigate to hh.ru
+2. Search for job listings
+3. Open each position
+4. Extract job details
+5. Fill out applications
+6. Confirm before submitting
+
+## Development Workflow
+
+1. **Plan**: Read RESEARCH.md and ARCHITECTURE.md
+2. **Implement**: Follow the structure and patterns defined
+3. **Test**: Write tests for all new functionality
+4. **Format**: Run `gofmt -w .`
+5. **Lint**: Run `golangci-lint run`
+6. **Document**: Update godoc comments
+7. **Commit**: Follow conventional commits
+
+## Key Documents
+
+- [RESEARCH.md](./RESEARCH.md) - Technology research and library selection
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - Detailed architecture and design
+- [go.mod](./go.mod) - Go modules dependencies
+- [go.sum](./go.sum) - Dependency checksums
+
+## Troubleshooting
+
+### Browser Won't Start
+
+- Check Chrome/Chromium is installed
+- Run with visible browser: `Headless(false)`
+- Check logs for detailed errors
+
+### Token Limit Exceeded
+
+- Check context window usage
+- Use summarization strategy
+- Reduce context chunk size
+
+### Element Not Found
+
+- Verify page is loaded
+- Use AI to find elements dynamically
+- Check for network issues
+
+### Context Canceled
+
+- Check for proper context propagation
+- Verify signal handling
+- Review error messages
+
+## License
+
+[Your License Here]
+
+## Contributing
+
+[Contributing Guidelines]
+
+
+
+================================================================================
+FILE: go.mod
+================================================================================
+module github.com/stannisl/ai-browser-assistant
+
+go 1.24.0
+
+require (
+	github.com/fatih/color v1.18.0
+	github.com/go-rod/rod v0.116.2
+	github.com/sashabaranov/go-openai v1.41.2
+	go.uber.org/zap v1.27.1
+)
+
+require (
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/ysmood/fetchup v0.2.3 // indirect
+	github.com/ysmood/goob v0.4.0 // indirect
+	github.com/ysmood/got v0.40.0 // indirect
+	github.com/ysmood/gson v0.7.3 // indirect
+	github.com/ysmood/leakless v0.9.0 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
+	golang.org/x/sys v0.25.0 // indirect
+)
+
+
+
+================================================================================
+FILE: configs/config.yaml
+================================================================================
+# AI Browser Assistant Configuration
+
+# API Configuration
+zai:
+  api_key: "${ZAI_API_KEY}"
+  base_url: "${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}"
+  model: "${ZAI_MODEL:-zlm-4.5-flash}"
+
+# Browser Configuration
+browser:
+  headless: true
+  user_data_dir: "${USER_DATA_DIR:-./user-data}"
+  window_size: [1280, 720]
+  page_timeout: 30s
+  element_timeout: 10s
+
+# Agent Configuration
+agent:
+  max_retries: 3
+  retry_delay: 2s
+  verbose: "${DEBUG:-false}"
+  
+  # Context Management
+  max_context_tokens: 4000
+  chunk_size: 1000
+  summary_threshold: 2000
+
+# Logging Configuration
+logging:
+  level: "${DEBUG:-info}"
+  format: json
+  output: stdout
+  file_output: "logs/agent.log"
+  max_size: 100
+  max_backups: 10
+  max_age: 30
+
+# Extraction Configuration
+extraction:
+  strategies:
+    - full
+    - summary
+    - selective
+  token_budget: 4000
+  preserve_links: true
+
+
+
+================================================================================
+FILE: cmd/agent/main.go
+================================================================================
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/stannisl/ai-browser-assistant/internal/agent"
+	"github.com/stannisl/ai-browser-assistant/internal/browser"
+	"github.com/stannisl/ai-browser-assistant/internal/extractor"
+	"github.com/stannisl/ai-browser-assistant/internal/llm"
+	"github.com/stannisl/ai-browser-assistant/internal/logger"
+	"github.com/stannisl/ai-browser-assistant/internal/types"
+)
+
+func main() {
+	apiKey := flag.String("api-key", os.Getenv("ZAI_API_KEY"), "Z.AI API key")
+	baseURL := flag.String("base-url", getEnvOrDefault("ZAI_BASE_URL", "https://api.z.ai/v1"), "API base URL")
+	model := flag.String("model", getEnvOrDefault("ZAI_MODEL", "glm-4.5-flash"), "Model name")
+	userDataDir := flag.String("user-data", getEnvOrDefault("USER_DATA_DIR", "./user-data"), "Browser session directory")
+	debug := flag.Bool("debug", os.Getenv("DEBUG") == "true", "Enable debug logging")
+
+	flag.Parse()
+
+	if *apiKey == "" {
+		fmt.Println("❌ ZAI_API_KEY не установлен")
+		fmt.Println("Использование: ZAI_API_KEY=your-key go run ./cmd/agent")
+		os.Exit(1)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	log, err := logger.New(*debug)
+	if err != nil {
+		fmt.Printf("❌ Ошибка создания логгера: %v\n", err)
+		os.Exit(1)
+	}
+	defer log.Close()
+
+	browserCfg := &types.BrowserConfig{
+		UserDataDir: *userDataDir,
+		Headless:    false,
+		Timeout:     30 * time.Second,
+		Debug:       *debug,
+	}
+	browserMgr := browser.NewManager(browserCfg, log)
+
+	fmt.Println("🚀 Запуск браузера...")
+	if err := browserMgr.Launch(ctx); err != nil {
+		log.Error("Ошибка запуска браузера", err)
+		os.Exit(1)
+	}
+	defer browserMgr.Close()
+
+	llmCfg := &types.LLMConfig{
+		APIKey:         *apiKey,
+		BaseURL:        *baseURL,
+		Model:          *model,
+		MaxTokens:      4000,
+		Temperature:    0.7,
+		MaxRetries:     3,
+		RequestTimeout: 60 * time.Second,
+	}
+	llmClient, err := llm.NewClient(llmCfg, log)
+	if err != nil {
+		log.Error("Ошибка создания LLM клиента", err)
+		os.Exit(1)
+	}
+
+	ext := extractor.New(browserMgr.GetPage(), log)
+
+	agentCfg := &types.AgentConfig{
+		MaxRetries:           3,
+		Timeout:              30 * time.Second,
+		SecurityEnabled:      true,
+		ConfirmationRequired: true,
+		ContextBudget:        4000,
+		ContextWindow:        8000,
+		SummaryEnabled:       false,
+		SummarizeEvery:       0,
+		MaxSteps:             50,
+	}
+	ag := agent.New(browserMgr, ext, llmClient, log, agentCfg)
+
+	fmt.Println()
+	fmt.Println("🤖 Browser AI Agent v1.0")
+	fmt.Printf("🌐 Браузер запущен (сессия: %s)\n", *userDataDir)
+	fmt.Printf("🧠 Модель: %s\n", *model)
+	fmt.Printf("🌐 baseURL Api модели: %s\n", *baseURL)
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("🤖 Введите задачу (или 'exit'): ")
+
+		if !scanner.Scan() {
+			break
+		}
+
+		task := strings.TrimSpace(scanner.Text())
+		if task == "" {
+			continue
+		}
+		if task == "exit" || task == "quit" || task == "q" {
+			break
+		}
+
+		fmt.Println()
+
+		if err := ag.Run(ctx, task); err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Println("\n⚠️ Прервано пользователем")
+				break
+			}
+			log.Error("Ошибка выполнения задачи", err)
+		}
+
+		fmt.Println()
+	}
+
+	fmt.Println("👋 До свидания!")
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+
+
+================================================================================
+FILE: internal/agent/agent.go
+================================================================================
+package agent
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/sashabaranov/go-openai"
+
+	"github.com/stannisl/ai-browser-assistant/internal/browser"
+	"github.com/stannisl/ai-browser-assistant/internal/extractor"
+	"github.com/stannisl/ai-browser-assistant/internal/llm"
+	"github.com/stannisl/ai-browser-assistant/internal/logger"
+	"github.com/stannisl/ai-browser-assistant/internal/types"
+)
+
+type Agent struct {
+	browser   *browser.Manager
+	extractor *extractor.Extractor
+	llm       *llm.Client
+	logger    *logger.Logger
+	config    *types.AgentConfig
+
+	messages      []openai.ChatCompletionMessage
+	step          int
+	lastToolName  string
+	sameToolCount int
+}
+
+func New(
+	browser *browser.Manager,
+	ext *extractor.Extractor,
+	llmClient *llm.Client,
+	log *logger.Logger,
+	config *types.AgentConfig,
+) *Agent {
+	return &Agent{
+		browser:   browser,
+		extractor: ext,
+		llm:       llmClient,
+		logger:    log,
+		config:    config,
+	}
+}
+
+func (a *Agent) Run(ctx context.Context, task string) error {
+	a.step = 0
+	a.messages = []openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: llm.SystemPrompt,
+		},
+		{
+			Role:    openai.ChatMessageRoleUser,
+			Content: task,
+		},
+	}
+	a.lastToolName = ""
+	a.sameToolCount = 0
+
+	for a.step < a.config.MaxSteps {
+		select {
+		case <-ctx.Done():
+			return types.ErrContextCanceled
+		default:
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		a.step++
+		a.logger.Step(a.step, a.config.MaxSteps)
+
+		a.trimHistory()
+
+		response, err := a.llm.Chat(ctx, a.messages)
+		if err != nil {
+			return fmt.Errorf("llm chat: %w", err)
+		}
+
+		toolCall, hasToolCall := a.llm.ExtractToolCall(response)
+
+		if !hasToolCall {
+			if len(response.Choices) > 0 {
+				msg := response.Choices[0].Message
+				a.messages = append(a.messages, msg)
+			}
+			continue
+		}
+
+		a.logger.Tool(toolCall.ToolName)
+
+		if toolCall.ToolName == a.lastToolName {
+			a.sameToolCount++
+			if a.sameToolCount >= 3 {
+				a.logger.Warn("Possible loop detected", "tool", toolCall.ToolName, "count", a.sameToolCount)
+			}
+		} else {
+			a.lastToolName = toolCall.ToolName
+			a.sameToolCount = 1
+		}
+
+		msg := response.Choices[0].Message
+
+		if len(msg.ToolCalls) > 0 {
+			msg.ToolCalls = nil
+			a.messages = append(a.messages, msg)
+		} else {
+			a.messages = append(a.messages, msg)
+		}
+
+		var firstErr error
+		var lastResult string
+
+		for _, tc := range toolCall.ToolCalls {
+			a.logger.Tool(tc.ToolName)
+
+			if tc.ToolName == a.lastToolName {
+				a.sameToolCount++
+				if a.sameToolCount >= 3 {
+					a.logger.Warn("Possible loop detected", "tool", tc.ToolName, "count", a.sameToolCount)
+				}
+			} else {
+				a.lastToolName = tc.ToolName
+				a.sameToolCount = 1
+			}
+
+			result, err := a.executeTool(ctx, &tc)
+			lastResult = result
+
+			toolResultContent := result
+			if err != nil && firstErr == nil {
+				firstErr = err
+				toolResultContent = fmt.Sprintf("Error: %v", err)
+			}
+
+			a.messages = append(a.messages, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				ToolCallID: tc.ID,
+				Content:    toolResultContent,
+			})
+
+			if tc.ToolName == "report" {
+				a.logger.Done(result, err == nil)
+				return nil
+			}
+		}
+
+		if firstErr != nil {
+			a.logger.Done(lastResult, false)
+			return firstErr
+		}
+	}
+
+	return types.ErrMaxStepsExceeded
+}
+
+func (a *Agent) trimHistory() {
+	const maxMessages = 20
+
+	if len(a.messages) <= maxMessages {
+		return
+	}
+
+	preserved := a.messages[:2]
+	recent := a.messages[len(a.messages)-(maxMessages-2):]
+	a.messages = append(preserved, recent...)
+
+	a.logger.Debug("History trimmed", "from", len(a.messages)+len(recent), "to", len(a.messages))
+}
+
+func (a *Agent) executeTool(ctx context.Context, tc *types.ToolCall) (string, error) {
+	if len(tc.ToolCalls) > 0 {
+		var results []string
+		var firstErr error
+		
+		for _, tcc := range tc.ToolCalls {
+			result, err := a.executeToolImpl(ctx, &tcc)
+			results = append(results, result)
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		
+		if firstErr != nil {
+			return results[0], firstErr
+		}
+		return results[0], nil
+	}
+	
+	return a.executeToolImpl(ctx, tc)
+}
+
+func (a *Agent) executeToolImpl(ctx context.Context, tc *types.ToolCall) (string, error) {
+	switch tc.ToolName {
+	case "extract_page":
+		return a.extractPage(ctx)
+	case "navigate":
+		url, ok := tc.Arguments["url"].(string)
+		if !ok {
+			return "", fmt.Errorf("invalid URL argument")
+		}
+		err := a.browser.Navigate(ctx, url)
+		return "", err
+	case "click":
+		id, ok := tc.Arguments["id"].(float64)
+		if !ok {
+			return "", fmt.Errorf("invalid id argument")
+		}
+		err := a.browser.Click(ctx, fmt.Sprintf("[%d]", int(id)))
+		return "", err
+	case "type_text":
+		id, ok := tc.Arguments["id"].(float64)
+		if !ok {
+			return "", fmt.Errorf("invalid id argument")
+		}
+		text, ok := tc.Arguments["text"].(string)
+		if !ok {
+			return "", fmt.Errorf("invalid text argument")
+		}
+		err := a.browser.Type(ctx, fmt.Sprintf("[%d]", int(id)), text)
+		return "", err
+	case "scroll":
+		direction, ok := tc.Arguments["direction"].(string)
+		if !ok {
+			return "", fmt.Errorf("invalid direction argument")
+		}
+		err := a.browser.Scroll(ctx, direction)
+		return "", err
+	case "wait":
+		seconds, ok := tc.Arguments["seconds"].(float64)
+		if !ok {
+			return "", fmt.Errorf("invalid seconds argument")
+		}
+		time.Sleep(time.Duration(seconds) * time.Second)
+		return fmt.Sprintf("Waited %d seconds", int(seconds)), nil
+	case "ask_user":
+		question, ok := tc.Arguments["question"].(string)
+		if !ok {
+			return "", fmt.Errorf("invalid question argument")
+		}
+		return fmt.Sprintf("Question: %s", question), nil
+	case "confirm_action":
+		return "Confirmation required for this action", nil
+	case "report":
+		result, ok := tc.Arguments["result"].(string)
+		if !ok {
+			result = "Task completed"
+		}
+		return result, nil
+	default:
+		return "", fmt.Errorf("unknown tool: %s", tc.ToolName)
+	}
+}
+
+func (a *Agent) extractPage(ctx context.Context) (string, error) {
+	pageState, err := a.extractor.Extract(ctx)
+	if err != nil {
+		return "", fmt.Errorf("extraction failed: %w", err)
+	}
+
+	format := a.extractor.FormatForLLM(pageState)
+	return format, nil
+}
+
+
+
+================================================================================
+FILE: internal/agent/executor.go
+================================================================================
+package agent
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/stannisl/ai-browser-assistant/internal/types"
+)
+
+func (a *Agent) executeExtractPage(ctx context.Context) (string, error) {
+	state, err := a.extractor.Extract(ctx)
+	if err != nil {
+		return "", fmt.Errorf("extract page: %w", err)
+	}
+	return a.extractor.FormatForLLM(state), nil
+}
+
+func (a *Agent) executeNavigate(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		URL string `json:"url"`
+	}
+	
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("parse navigate: %w", err)
+	}
+	
+	a.logger.Navigate(params.URL)
+	
+	if err := a.browser.Navigate(ctx, params.URL); err != nil {
+		a.logger.Error("Navigation failed", err, "url", params.URL)
+		return fmt.Sprintf("Error: navigation to %s failed: %v", params.URL, err), nil
+	}
+	
+	return fmt.Sprintf("Navigated to %s. Call extract_page to see the page.", params.URL), nil
+}
+
+func (a *Agent) executeClick(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		ElementID int `json:"element_id"`
+	}
+	
+	if err := json.Unmarshal(input, &params); err != nil {
+		a.logger.Error("Failed to parse click input", err)
+		return "", fmt.Errorf("parse click input: %w, raw: %s", err, string(input))
+	}
+	
+	a.logger.Debug("Click requested", "element_id", params.ElementID)
+	
+	selector, err := a.extractor.GetSelector(params.ElementID)
+	if err != nil {
+		a.logger.Error("Element not found", err, "element_id", params.ElementID)
+		return fmt.Sprintf("Error: element [%d] not found. Call extract_page to refresh elements.", params.ElementID), nil
+	}
+	
+	a.logger.Click(params.ElementID, selector)
+	
+	if err := a.browser.Click(ctx, selector); err != nil {
+		a.logger.Error("Click failed", err, "selector", selector)
+		return fmt.Sprintf("Error: click on [%d] failed: %v. Try another element.", params.ElementID, err), nil
+	}
+	
+	return fmt.Sprintf("Clicked element [%d]. Call extract_page to see the result.", params.ElementID), nil
+}
+
+func (a *Agent) executeTypeText(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		ElementID int    `json:"element_id"`
+		Text      string `json:"text"`
+	}
+	
+	if err := json.Unmarshal(input, &params); err != nil {
+		a.logger.Error("Failed to parse type_text input", err)
+		return "", fmt.Errorf("parse type_text: %w, raw: %s", err, string(input))
+	}
+	
+	a.logger.Debug("Type text requested", "element_id", params.ElementID, "text", params.Text)
+	
+	if params.Text == "" {
+		return "Error: text is empty. Provide text to type.", nil
+	}
+	
+	selector, err := a.extractor.GetSelector(params.ElementID)
+	if err != nil {
+		a.logger.Error("Element not found for typing", err, "element_id", params.ElementID)
+		return fmt.Sprintf("Error: element [%d] not found. Call extract_page first.", params.ElementID), nil
+	}
+	
+	a.logger.Type(params.ElementID, params.Text)
+	
+	if err := a.browser.Type(ctx, selector, params.Text); err != nil {
+		a.logger.Error("Type failed", err, "selector", selector)
+		return fmt.Sprintf("Error: typing into [%d] failed: %v", params.ElementID, err), nil
+	}
+	
+	return fmt.Sprintf("Typed '%s' into element [%d]. Now click search button or press Enter.", params.Text, params.ElementID), nil
+}
+
+func (a *Agent) executeScroll(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	direction, ok := arguments["direction"].(string)
+	if !ok {
+		return "", fmt.Errorf("invalid direction argument")
+	}
+
+	if err := a.browser.Scroll(ctx, direction); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Scrolled %s", direction), nil
+}
+
+func (a *Agent) executeWait(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	seconds, ok := arguments["seconds"].(float64)
+	if !ok {
+		return "", fmt.Errorf("invalid seconds argument")
+	}
+
+	waitSeconds := int(seconds)
+	if waitSeconds < 1 {
+		waitSeconds = 1
+	}
+	if waitSeconds > 10 {
+		waitSeconds = 10
+	}
+
+	time.Sleep(time.Duration(waitSeconds) * time.Second)
+
+	return fmt.Sprintf("Waited %d seconds", waitSeconds), nil
+}
+
+func (a *Agent) executeAskUser(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	question, ok := arguments["question"].(string)
+	if !ok {
+		return "", fmt.Errorf("invalid question argument")
+	}
+
+	a.logger.Ask(question)
+
+	fmt.Printf("\n💬 %s\n", question)
+	fmt.Print("Ваш ответ: ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	answer := strings.TrimSpace(scanner.Text())
+
+	return fmt.Sprintf("User answered: %s", answer), nil
+}
+
+func (a *Agent) executeConfirmAction(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	description, ok := arguments["description"].(string)
+	if !ok {
+		return "", fmt.Errorf("invalid description argument")
+	}
+
+	a.logger.Confirm(description)
+
+	fmt.Printf("\n🔒 [ПОДТВЕРЖДЕНИЕ ТРЕБУЕТСЯ]\n")
+	fmt.Printf("Действие: %s\n", description)
+	fmt.Print("Продолжить? (yes/no): ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+
+	if answer == "yes" || answer == "y" || answer == "да" || answer == "д" {
+		return "User confirmed the action. Proceed.", nil
+	}
+
+	return "User DENIED the action. Do NOT proceed.", types.ErrConfirmationDenied
+}
+
+func (a *Agent) executeReport(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	message, ok := arguments["message"].(string)
+	if !ok {
+		message = "Task completed"
+	}
+
+	success, ok := arguments["success"].(bool)
+	if !ok {
+		success = true
+	}
+
+	a.logger.Done(message, success)
+
+	return message, nil
+}
+
+
+
+================================================================================
+FILE: internal/browser/browser.go
+================================================================================
+package browser
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
+	"github.com/stannisl/ai-browser-assistant/internal/logger"
+	"github.com/stannisl/ai-browser-assistant/internal/types"
+)
+
+type Manager struct {
+	browser *rod.Browser
+	page    *rod.Page
+	config  *types.BrowserConfig
+	log     *logger.Logger
+}
+
+func NewManager(config *types.BrowserConfig, log *logger.Logger) *Manager {
+	return &Manager{
+		config: config,
+		log:    log,
+	}
+}
+
+func (m *Manager) Launch(ctx context.Context) error {
+	launcher := launcher.New().
+		Headless(false).
+		UserDataDir(m.config.UserDataDir).
+		MustLaunch()
+
+	if m.config.Debug {
+		m.log.Debug("Browser launched in visible mode", "UserDataDir", m.config.UserDataDir)
+	}
+
+	m.browser = rod.New().
+		ControlURL(launcher).
+		MustConnect()
+
+	if m.config.Debug {
+		m.log.Debug("Rod browser instance created")
+	}
+
+	m.page = m.browser.MustPage("about:blank")
+
+	if m.config.Debug {
+		m.log.Debug("Browser page initialized")
+	}
+
+	return nil
+}
+
+func (m *Manager) Navigate(ctx context.Context, url string) error {
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("navigation canceled: %w", ctx.Err())
+	default:
+	}
+
+	if !isValidURL(url) {
+		return fmt.Errorf("invalid URL: %s", url)
+	}
+
+	if m.config.Debug {
+		m.log.Debug("Navigating to URL", "url", url)
+	}
+
+	err := m.page.Navigate(url)
+	if err != nil {
+		return fmt.Errorf("navigation to %s failed: %w", url, err)
+	}
+
+	err = m.page.WaitLoad()
+	if err != nil {
+		return fmt.Errorf("wait for page load failed: %w", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	if m.config.Debug {
+		m.log.Debug("Page loaded successfully", "url", url)
+	}
+
+	return nil
+}
+
+func (m *Manager) Click(ctx context.Context, selector string) error {
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("click canceled: %w", ctx.Err())
+	default:
+	}
+
+	if m.config.Debug {
+		m.log.Debug("Clicking element", "selector", selector)
+	}
+
+	el, err := m.page.Element(selector)
+	if err != nil {
+		return fmt.Errorf("click on element %s failed: %w", selector, err)
+	}
+
+	el.Click(proto.InputMouseButtonLeft, 1)
+
+	if m.config.Debug {
+		m.log.Debug("Element clicked successfully", "selector", selector)
+	}
+
+	return nil
+}
+
+func (m *Manager) Type(ctx context.Context, selector, text string) error {
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("type canceled: %w", ctx.Err())
+	default:
+	}
+
+	if m.config.Debug {
+		m.log.Debug("Typing into element", "selector", selector, "text", text)
+	}
+
+	el, err := m.page.Element(selector)
+	if err != nil {
+		return fmt.Errorf("type into element %s failed: %w", selector, err)
+	}
+
+	el.MustInput("")
+	el.MustInput(text)
+
+	if m.config.Debug {
+		m.log.Debug("Text entered successfully", "selector", selector)
+	}
+
+	return nil
+}
+
+func (m *Manager) Scroll(ctx context.Context, direction string) error {
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("scroll canceled: %w", ctx.Err())
+	default:
+	}
+
+	if m.config.Debug {
+		m.log.Debug("Scrolling page", "direction", direction)
+	}
+
+	if direction == "up" {
+		m.page.MustElement("body").Page().Mouse.Scroll(0, -400, 1) // ScrollUp
+	} else if direction == "down" {
+		m.page.MustElement("body").Page().Mouse.Scroll(0, 400, 1) // ScrollDown
+	} else {
+		return fmt.Errorf("invalid scroll direction: %s", direction)
+	}
+
+	if m.config.Debug {
+		m.log.Debug("Page scrolled successfully", "direction", direction)
+	}
+
+	return nil
+}
+
+func (m *Manager) GetPage() *rod.Page {
+	return m.page
+}
+
+func (m *Manager) GetURL() string {
+	return m.page.MustElement("html").MustProperty("location.href").String()
+}
+
+func (m *Manager) GetTitle() string {
+	return m.page.MustElement("html").MustProperty("title").String()
+}
+
+func (m *Manager) Close() error {
+	if m.page != nil {
+		m.page.MustClose()
+	}
+
+	if m.browser != nil {
+		m.browser.MustClose()
+	}
+
+	return nil
+}
+
+func isValidURL(url string) bool {
+	return len(url) > 0 && (len(url) > 4 && url[:4] == "http")
+}
+
+
+
+================================================================================
+FILE: internal/extractor/extractor.go
+================================================================================
+package extractor
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/stannisl/ai-browser-assistant/internal/logger"
+	"github.com/stannisl/ai-browser-assistant/internal/types"
+)
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+type Extractor struct {
+	page      *rod.Page
+	selectors sync.Map
+	counter   int
+	logger    *logger.Logger
+}
+
+func New(page *rod.Page, log *logger.Logger) *Extractor {
+	return &Extractor{
+		page:   page,
+		logger: log,
+	}
+}
+
+func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
+	e.counter = 0
+	e.selectors = sync.Map{}
+
+	var url string
+	if info, err := e.page.Info(); err == nil && info != nil {
+		url = info.URL
+	} else {
+		url = e.page.MustElement("html").MustProperty("location.href").String()
+	}
+	title := e.page.MustElement("html").MustProperty("title").String()
+
+	jsCode := `() => {
+    const results = [];
+    const selectors = [
+        'button', 'a[href]', 'input', 'select', 'textarea',
+        '[role="button"]', '[onclick]', '[role="link"]',
+        '[role="menuitem"]', '[role="tab"]', '[type="submit"]'
+    ];
+    
+    const seen = new Set();
+    
+    selectors.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => {
+            if (seen.has(el)) return;
+            seen.add(el);
+            
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            
+            const isVisible = rect.width > 0 && 
+                             rect.height > 0 && 
+                             style.display !== 'none' &&
+                             style.visibility !== 'hidden' &&
+                             parseFloat(style.opacity) > 0;
+            
+            if (!isVisible) return;
+            
+            let selector = '';
+            if (el.id) {
+                selector = '#' + el.id;
+            } else {
+                const path = [];
+                let current = el;
+                while (current && current !== document.body) {
+                    let index = 1;
+                    let sibling = current.previousElementSibling;
+                    while (sibling) {
+                        if (sibling.tagName === current.tagName) index++;
+                        sibling = sibling.previousElementSibling;
+                    }
+                    path.unshift(current.tagName.toLowerCase() + ':nth-of-type(' + index + ')');
+                    current = current.parentElement;
+                }
+                selector = 'body > ' + path.join(' > ');
+            }
+            
+            results.push({
+                type: el.tagName.toLowerCase(),
+                text: (el.innerText || el.value || '').slice(0, 100).trim(),
+                placeholder: el.placeholder || '',
+                ariaLabel: el.getAttribute('aria-label') || '',
+                href: el.href || '',
+                inputType: el.type || '',
+                selector: selector
+            });
+        });
+    });
+    
+    const hasModal = !!(
+        document.querySelector('[role="dialog"]') ||
+        document.querySelector('[role="alertdialog"]') ||
+        document.querySelector('.modal.show') ||
+        document.querySelector('[class*="modal"][class*="open"]')
+    );
+    
+    return { elements: results, hasModal: hasModal };
+}`
+
+	res := e.page.MustEval(jsCode)
+
+	var result struct {
+		Elements []struct {
+			Type        string `json:"type"`
+			Text        string `json:"text"`
+			Placeholder string `json:"placeholder"`
+			AriaLabel   string `json:"ariaLabel"`
+			Href        string `json:"href"`
+			InputType   string `json:"inputType"`
+			Selector    string `json:"selector"`
+		} `json:"elements"`
+		HasModal bool `json:"hasModal"`
+	}
+
+	err := json.Unmarshal([]byte(res.JSON("", "")), &result)
+	if err != nil {
+		return nil, fmt.Errorf("JSON unmarshal failed: %w", err)
+	}
+
+	pageState := &types.PageState{
+		Title:        title,
+		URL:          url,
+		Elements:     []types.PageElement{},
+		ElementCount: 0,
+		InputCount:   0,
+		ButtonCount:  0,
+		LinkCount:    0,
+		Timestamp:    time.Now(),
+		IsLoading:    false,
+		ScrollY:      0,
+		Viewport: struct {
+			Width  int
+			Height int
+		}{
+			Width:  1920,
+			Height: 1080,
+		},
+		HasModal: result.HasModal,
+	}
+
+	const maxElements = 50
+	var elements []types.PageElement
+	elementsRaw := result.Elements
+
+	for i, elem := range elementsRaw {
+		if i >= maxElements {
+			break
+		}
+		selectorID := e.counter
+		e.selectors.Store(selectorID, elem.Selector)
+
+		pageElement := types.PageElement{
+			ID:         i,
+			Selector:   elem.Selector,
+			Text:       elem.Text,
+			Tag:        elem.Type,
+			Attributes: map[string]string{
+				"placeholder": elem.Placeholder,
+				"aria-label":  elem.AriaLabel,
+				"type":        elem.InputType,
+				"href":        elem.Href,
+			},
+			Clickable:     true,
+			Visible:       true,
+			DiscoveryTime: time.Now(),
+		}
+
+		if elem.Type == "a" && len(elem.Href) > 0 {
+			pageElement.Attributes["href"] = elem.Href
+		}
+
+		pageState.ElementCount++
+		if elem.Type == "input" || elem.Type == "textarea" || elem.Type == "select" {
+			pageState.InputCount++
+		}
+		if elem.Type == "button" || strings.Contains(elem.AriaLabel, "submit") {
+			pageState.ButtonCount++
+		}
+		if elem.Type == "a" {
+			pageState.LinkCount++
+		}
+
+		elements = append(elements, pageElement)
+		e.counter++
+	}
+
+	if len(elementsRaw) > maxElements {
+		pageState.Content = fmt.Sprintf("Showing %d of %d elements", len(elements), len(elementsRaw))
+	} else {
+		pageState.Content = fmt.Sprintf("Showing %d elements", pageState.ElementCount)
+	}
+
+	pageState.Elements = elements
+
+	pageState.Scripts = []string{}
+	pageState.Forms = []types.FormElement{}
+	pageState.Links = []types.LinkElement{}
+
+	if e.logger != nil {
+		e.logger.Extract(url, pageState.ElementCount)
+	}
+
+	return pageState, nil
+}
+
+func (e *Extractor) GetSelector(id int) (string, error) {
+	value, ok := e.selectors.Load(id)
+	if !ok {
+		return "", types.ErrElementNotFound
+	}
+	return value.(string), nil
+}
+
+func (e *Extractor) FormatForLLM(state *types.PageState) string {
+	var builder strings.Builder
+
+	builder.WriteString(fmt.Sprintf("Page: %s\n", state.Title))
+	builder.WriteString(fmt.Sprintf("URL: %s\n\n", state.URL))
+
+	if state.HasModal {
+		builder.WriteString("[!!! MODAL WINDOW ACTIVE !!!]\n\n")
+	}
+
+	var inputs, buttons, links, other []types.PageElement
+
+	for _, el := range state.Elements {
+		switch {
+		case el.Tag == "input" || el.Tag == "textarea" || el.Tag == "select":
+			state.InputCount++
+			inputs = append(inputs, el)
+		case el.Tag == "button" || strings.Contains(el.Attributes["aria-label"], "submit"):
+			state.ButtonCount++
+			buttons = append(buttons, el)
+		case el.Tag == "a":
+			state.LinkCount++
+			links = append(links, el)
+		default:
+			other = append(other, el)
+		}
+	}
+
+	builder.WriteString("[Input Fields]\n")
+	for _, el := range inputs {
+		builder.WriteString(e.formatElement(el) + "\n")
+	}
+
+	builder.WriteString("\n[Buttons]\n")
+	for _, el := range buttons {
+		builder.WriteString(e.formatElement(el) + "\n")
+	}
+
+	builder.WriteString("\n[Links - first 20]\n")
+	for i, el := range links {
+		if i >= 20 {
+			break
+		}
+		builder.WriteString(e.formatElement(el) + "\n")
+	}
+
+	builder.WriteString(fmt.Sprintf("\n[Page Info]\nTotal: %d | Shown: %d\n", state.ElementCount, len(inputs)+len(buttons)+min(len(links), 20)))
+
+	return builder.String()
+}
+
+func (e *Extractor) formatElement(el types.PageElement) string {
+	line := fmt.Sprintf("[%d] %s", el.ID, el.Tag)
+
+	if len(el.Text) > 0 {
+		line += fmt.Sprintf(" \"%s\"", truncate(el.Text, 40))
+	}
+	if len(el.Attributes["placeholder"]) > 0 {
+		line += fmt.Sprintf(" placeholder=\"%s\"", truncate(el.Attributes["placeholder"], 25))
+	}
+	if el.Tag == "a" && strings.HasPrefix(el.Attributes["href"], "http") {
+		line += fmt.Sprintf(" → %s", truncate(el.Attributes["href"], 50))
+	}
+
+	return line
+}
+
+func boolToString(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+
+
+================================================================================
+FILE: internal/llm/client.go
+================================================================================
+package llm
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/sashabaranov/go-openai"
+	"github.com/stannisl/ai-browser-assistant/internal/logger"
+	"github.com/stannisl/ai-browser-assistant/internal/types"
+)
+
+type Client struct {
+	client *openai.Client
+	model  string
+	logger *logger.Logger
+}
+
+func NewClient(config *types.LLMConfig, log *logger.Logger) (*Client, error) {
+	cfg := openai.DefaultConfig(config.APIKey)
+	cfg.BaseURL = config.BaseURL
+
+	client := openai.NewClientWithConfig(cfg)
+
+	return &Client{
+		client: client,
+		model:  config.Model,
+		logger: log,
+	}, nil
+}
+
+func (c *Client) Chat(ctx context.Context, messages []openai.ChatCompletionMessage) (*openai.ChatCompletionResponse, error) {
+	c.logger.Thinking()
+
+	req := openai.ChatCompletionRequest{
+		Model:    c.model,
+		Messages: messages,
+		Tools:    GetTools(),
+	}
+
+	resp, err := c.client.CreateChatCompletion(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("chat completion failed: %w", err)
+	}
+
+	return &resp, nil
+}
+
+func (c *Client) ExtractToolCall(response *openai.ChatCompletionResponse) (*types.ToolCall, bool) {
+	if len(response.Choices) == 0 {
+		return nil, false
+	}
+
+	choice := response.Choices[0]
+
+	if len(choice.Message.ToolCalls) == 0 {
+		return nil, false
+	}
+
+	var toolCalls []types.ToolCall
+	for _, tc := range choice.Message.ToolCalls {
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			args = map[string]interface{}{}
+		}
+
+		toolCalls = append(toolCalls, types.ToolCall{
+			ID:        tc.ID,
+			ToolName:  tc.Function.Name,
+			Arguments: args,
+		})
+	}
+
+	return &types.ToolCall{
+		ToolCalls: toolCalls,
+	}, true
+}
+
+func (c *Client) GetModel() string {
+	return c.model
+}
+
+
+
+================================================================================
+FILE: internal/llm/prompts.go
+================================================================================
+package llm
+
+const SystemPrompt = `You are an autonomous browser agent. You control a real web browser to complete user tasks.
+
+## Available Tools
+
+1. **extract_page** - Get current page state. ALWAYS call this first and after every action.
+2. **navigate** - Go to a URL
+3. **click** - Click element by ID from [Interactive Elements], e.g. click element [5]
+4. **type_text** - Type text into an input field by element ID
+5. **scroll** - Scroll the page "up" or "down"
+6. **wait** - Wait 1-10 seconds for page to load
+7. **ask_user** - Ask the user a question when you need information
+8. **confirm_action** - Request confirmation before dangerous actions
+9. **report** - Report task completion with result
+
+## Strategy
+
+1. ALWAYS start with extract_page to see the current page
+2. Analyze [Interactive Elements] - each has an ID like [0], [1], [2]
+3. Use the element ID to interact: click element [5], type into element [3]
+4. After EVERY action, call extract_page to verify the result
+5. If something goes wrong, try a different approach
+6. If you need information from user, use ask_user
+7. When task is complete, call report with the result
+
+## Security Rules (MANDATORY)
+
+ALWAYS call confirm_action before:
+- Payment, purchase, checkout, money transfer
+- Deleting data (emails, files, accounts)
+- Sending applications, messages, submitting forms
+- Any irreversible action
+
+## Response Format
+
+ALWAYS respond with a tool call. Never respond with plain text.
+
+## Important Constraints
+
+- Do NOT assume page structure - always extract_page first
+- Do NOT use URLs you haven't seen on the page
+- ONLY interact with elements from [Interactive Elements] using their IDs
+- If an element disappeared, call extract_page again
+- Maximum 50 actions per task
+- If stuck, try scrolling or ask_user for help
+`
+
+
+
+================================================================================
+FILE: internal/llm/tools.go
+================================================================================
+package llm
+
+import (
+	"github.com/sashabaranov/go-openai"
+)
+
+func GetTools() []openai.Tool {
+	return []openai.Tool{
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "extract_page",
+				Description: "Get current page state with all interactive elements. ALWAYS call this first and after any action to see the result.",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+					"required":   []string{},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "navigate",
+				Description: "Navigate to a URL",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"url": map[string]interface{}{
+							"type":        "string",
+							"description": "The URL to navigate to",
+						},
+					},
+					"required": []string{"url"},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "click",
+				Description: "Click on an element by its ID from [Interactive Elements] list",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"element_id": map[string]interface{}{
+							"type":        "integer",
+							"description": "The ID of element to click, e.g. 5 for [5]",
+						},
+					},
+					"required": []string{"element_id"},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "type_text",
+				Description: "Type text into an input field by its ID",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"element_id": map[string]interface{}{
+							"type":        "integer",
+							"description": "The ID of element to type into",
+						},
+						"text": map[string]interface{}{
+							"type":        "string",
+							"description": "The text to type",
+						},
+					},
+					"required": []string{"element_id", "text"},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "scroll",
+				Description: "Scroll the page in the specified direction",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"direction": map[string]interface{}{
+							"type":        "string",
+							"description": "Direction to scroll: 'up' or 'down'",
+						},
+					},
+					"required": []string{"direction"},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "wait",
+				Description: "Wait for the page to stabilize",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"seconds": map[string]interface{}{
+							"type":        "integer",
+							"description": "Number of seconds to wait (1-10)",
+							"minimum":     1,
+							"maximum":     10,
+						},
+					},
+					"required": []string{"seconds"},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "ask_user",
+				Description: "Ask the user a question and wait for response",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"question": map[string]interface{}{
+							"type":        "string",
+							"description": "The question to ask the user",
+						},
+					},
+					"required": []string{"question"},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "confirm_action",
+				Description: "Confirm a potentially destructive action with the user",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"description": map[string]interface{}{
+							"type":        "string",
+							"description": "Description of the action to confirm",
+						},
+					},
+					"required": []string{"description"},
+				},
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "report",
+				Description: "Report the completion of a task or operation",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"message": map[string]interface{}{
+							"type":        "string",
+							"description": "The message to report",
+						},
+						"success": map[string]interface{}{
+							"type":        "boolean",
+							"description": "Whether the operation was successful",
+						},
+					},
+					"required": []string{"message", "success"},
+				},
+			},
+		},
+	}
+}
+
+type NavigateInput struct {
+	URL string `json:"url"`
+}
+
+type ClickInput struct {
+	ElementID int `json:"element_id"`
+}
+
+type TypeTextInput struct {
+	ElementID int    `json:"element_id"`
+	Text      string `json:"text"`
+}
+
+type ScrollInput struct {
+	Direction string `json:"direction"`
+}
+
+type WaitInput struct {
+	Seconds int `json:"seconds"`
+}
+
+type AskUserInput struct {
+	Question string `json:"question"`
+}
+
+type ConfirmActionInput struct {
+	Description string `json:"description"`
+}
+
+type ReportInput struct {
+	Message string `json:"message"`
+	Success bool   `json:"success"`
+}
+
+
+
+================================================================================
+FILE: internal/logger/logger.go
+================================================================================
+package logger
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/fatih/color"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+)
+
+var (
+	infoColor       = color.New(color.FgCyan)
+	debugColor      = color.New(color.FgGreen)
+	errorColor      = color.New(color.FgRed)
+	warnColor       = color.New(color.FgYellow)
+	successColor    = color.New(color.FgGreen)
+	errorMsgColor   = color.New(color.FgWhite, color.Bold)
+	successMsgColor = color.New(color.FgGreen, color.Bold)
+	stepColor       = color.New(color.FgMagenta)
+	toolColor       = color.New(color.FgBlue)
+	thinkColor      = color.New(color.FgYellow)
+)
+
+type Logger struct {
+	sugared *zap.SugaredLogger
+}
+
+func New(debug bool) (*Logger, error) {
+	config := zap.NewProductionConfig()
+	config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	if debug {
+		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+		config.Development = true
+	}
+
+	config.EncoderConfig.TimeKey = "time"
+	config.EncoderConfig.LevelKey = "level"
+	config.EncoderConfig.NameKey = "logger"
+	config.EncoderConfig.CallerKey = "caller"
+	config.EncoderConfig.FunctionKey = zapcore.OmitKey
+	config.EncoderConfig.MessageKey = "msg"
+	config.EncoderConfig.StacktraceKey = "stacktrace"
+	config.EncoderConfig.LineEnding = zapcore.DefaultLineEnding
+	config.EncoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	config.EncoderConfig.EncodeDuration = zapcore.StringDurationEncoder
+	config.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
+
+	encoderConfig := config.EncoderConfig
+	encoderConfig.TimeKey = "time"
+	encoderConfig.LevelKey = "level"
+	encoderConfig.NameKey = "logger"
+	encoderConfig.CallerKey = "caller"
+	encoderConfig.FunctionKey = zapcore.OmitKey
+	encoderConfig.MessageKey = "msg"
+	encoderConfig.StacktraceKey = "stacktrace"
+	encoderConfig.LineEnding = zapcore.DefaultLineEnding
+	encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	encoderConfig.EncodeDuration = zapcore.StringDurationEncoder
+	encoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
+
+	var logger *zap.Logger
+	var err error
+	if debug {
+		logger, err = config.Build(zap.AddCaller(), zap.Development())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create logger in debug mode: %w", err)
+		}
+	} else {
+		logger, err = config.Build(zap.AddCaller())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create logger: %w", err)
+		}
+	}
+
+	return &Logger{sugared: logger.Sugar()}, nil
+}
+
+func (l *Logger) Close() {
+	l.sugared.Sync()
+}
+
+func (l *Logger) Info(msg string, keysAndValues ...interface{}) {
+	l.sugared.Infow(msg, keysAndValues...)
+}
+
+func (l *Logger) Debug(msg string, keysAndValues ...interface{}) {
+	l.sugared.Debugw(msg, keysAndValues...)
+}
+
+func (l *Logger) Error(msg string, keysAndValues ...interface{}) {
+	l.sugared.Errorw(msg, keysAndValues...)
+}
+
+func (l *Logger) Warn(msg string, keysAndValues ...interface{}) {
+	l.sugared.Warnw(msg, keysAndValues...)
+}
+
+func (l *Logger) Extract(url string, count int) {
+	infoColor.Printf("🔍 [EXTRACT] %s (%d elements)\n", truncate(url, 100), count)
+	l.sugared.Info("Extract page content", "url", url, "count", count)
+}
+
+func (l *Logger) Navigate(url string) {
+	infoColor.Printf("🌐 [NAVIGATE] %s\n", truncate(url, 100))
+	l.sugared.Info("Navigate to URL", "url", url)
+}
+
+func (l *Logger) Click(id int, text string) {
+	infoColor.Printf("🖱️  [CLICK] [%d] %s\n", id, truncate(text, 50))
+	l.sugared.Info("Click element", "id", id, "text", text)
+}
+
+func (l *Logger) Type(id int, text string) {
+	infoColor.Printf("⌨️  [TYPE] [%d] \"%s\"\n", id, truncate(text, 50))
+	l.sugared.Info("Type into element", "id", id, "text", text)
+}
+
+func (l *Logger) Scroll(direction string) {
+	infoColor.Printf("📜 [SCROLL] %s\n", direction)
+	l.sugared.Info("Scroll page", "direction", direction)
+}
+
+func (l *Logger) Confirm(desc string) {
+	errorMsgColor.Printf("🔒 [CONFIRM] %s\n", truncate(desc, 100))
+	l.sugared.Warn("Confirmation required", "description", desc)
+}
+
+func (l *Logger) Ask(question string) {
+	infoColor.Printf("💬 [ASK] %s\n", truncate(question, 100))
+	l.sugared.Info("User question", "question", question)
+}
+
+func (l *Logger) Done(msg string, success bool) {
+	if success {
+		successMsgColor.Printf("✅ [DONE] %s\n", truncate(msg, 100))
+		l.sugared.Info("Operation completed successfully", "message", msg)
+	} else {
+		errorMsgColor.Printf("❌ [FAILED] %s\n", truncate(msg, 100))
+		l.sugared.Error("Operation failed", "message", msg)
+	}
+}
+
+func (l *Logger) Step(current, max int) {
+	stepColor.Printf("📍 [STEP %d/%d]\n", current, max)
+	l.sugared.Info("Step progress", "current", current, "max", max)
+}
+
+func (l *Logger) Thinking() {
+	thinkColor.Print("🤔 [THINKING]...\n")
+	l.sugared.Debug("AI is thinking")
+}
+
+func (l *Logger) Tool(name string) {
+	toolColor.Printf("🔧 [TOOL] %s\n", truncate(name, 50))
+	l.sugared.Info("Executing tool", "tool", name)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+func init() {
+	if !isTerminal() {
+		disableColors()
+	}
+}
+
+func isTerminal() bool {
+	fileInfo, _ := os.Stdout.Stat()
+	return (fileInfo.Mode() & os.ModeCharDevice) != 0
+}
+
+func disableColors() {
+	color.NoColor = true
+}
+
+
+
+================================================================================
+FILE: internal/types/agent.go
+================================================================================
+package types
+
+import "time"
+
+type ToolCall struct {
+	ID          string
+	ToolName    string
+	Arguments   map[string]interface{}
+	Result      interface{}
+	Error       error
+	ExecuteTime time.Duration
+	CreatedAt   time.Time
+	CompletedAt *time.Time
+	ToolCalls   []ToolCall
+}
+
+type AgentConfig struct {
+	MaxRetries           int
+	Timeout              time.Duration
+	SecurityEnabled      bool
+	ConfirmationRequired bool
+	ContextBudget        int
+	ContextWindow        int
+	SummaryEnabled       bool
+	SummarizeEvery       time.Duration
+	MaxSteps             int
+}
+
+type LLMConfig struct {
+	APIKey         string
+	BaseURL        string
+	Model          string
+	MaxTokens      int
+	Temperature    float64
+	MaxRetries     int
+	RequestTimeout time.Duration
+}
+
+type ToolDefinition struct {
+	Name        string
+	Description string
+	Parameters  map[string]interface{}
+}
+
+type ToolParam struct {
+	Type       string
+	Required   bool
+	Properties map[string]interface{}
+}
+
+type LLMResponse struct {
+	Content      string
+	ToolCalls    []ToolCall
+	UsedTokens   int
+	Model        string
+	FinishReason string
+}
+
+type MessageParam struct {
+	Role    string
+	Content string
+}
+
+
+
+================================================================================
+FILE: internal/types/browser.go
+================================================================================
+package types
+
+import "time"
+
+type PageElement struct {
+	ID         int
+	Selector   string
+	Text       string
+	Tag        string
+	Attributes map[string]string
+	Clickable  bool
+	Visible    bool
+	Position   struct {
+		X      int
+		Y      int
+		Width  int
+		Height int
+	}
+	DiscoveryTime time.Time
+}
+
+type PageState struct {
+	Title        string
+	URL          string
+	Elements     []PageElement
+	Scripts      []string
+	Forms        []FormElement
+	Links        []LinkElement
+	Timestamp    time.Time
+	IsLoading    bool
+	ScrollY      int
+	Viewport     struct {
+		Width  int
+		Height int
+	}
+	HasModal    bool
+	InputCount  int
+	ButtonCount int
+	LinkCount   int
+	ElementCount int
+	Content     string
+}
+
+type FormElement struct {
+	ID         string
+	Name       string
+	Selector   string
+	Inputs     []InputField
+	SubmitBtn  *SubmitButton
+	IsComplete bool
+}
+
+type InputField struct {
+	ID          string
+	Name        string
+	Type        string
+	Selector    string
+	Required    bool
+	Placeholder string
+}
+
+type SubmitButton struct {
+	ID       string
+	Name     string
+	Selector string
+	Type     string
+	Visible  bool
+	Enabled  bool
+}
+
+type LinkElement struct {
+	ID        string
+	Href      string
+	Text      string
+	Selector  string
+	Visible   bool
+	Clickable bool
+	Rel       string
+	Title     string
+}
+
+type BrowserConfig struct {
+	Headless    bool
+	UserDataDir string
+	Timeout     time.Duration
+	Viewport    struct {
+		Width  int
+		Height int
+	}
+	Incognito bool
+	Debug     bool
+}
+
+
+
+================================================================================
+FILE: internal/types/errors.go
+================================================================================
+package types
+
+import "fmt"
+
+var (
+	ErrElementNotFound          = fmt.Errorf("element not found")
+	ErrNavigationFailed         = fmt.Errorf("navigation failed")
+	ErrContextExhausted         = fmt.Errorf("context budget exhausted")
+	ErrSecurityRequired         = fmt.Errorf("security: action requires user confirmation")
+	ErrInvalidURL               = fmt.Errorf("invalid URL")
+	ErrPageLoadTimeout          = fmt.Errorf("page load timeout")
+	ErrElementInteractionFailed = fmt.Errorf("element interaction failed")
+	ErrTooManyAttempts          = fmt.Errorf("too many attempts")
+	ErrInvalidSelector          = fmt.Errorf("invalid selector")
+	ErrNoValidElements          = fmt.Errorf("no valid elements found")
+	ErrPageIncompatible         = fmt.Errorf("page not compatible with current operation")
+	ErrTimeout                  = fmt.Errorf("operation timeout")
+	ErrContextCanceled          = fmt.Errorf("operation canceled")
+	ErrAuthRequired             = fmt.Errorf("authentication required")
+	ErrRateLimited              = fmt.Errorf("rate limit exceeded")
+	ErrNetworkError             = fmt.Errorf("network error")
+	ErrToolExecutionFailed      = fmt.Errorf("tool execution failed")
+	ErrLLMResponseInvalid       = fmt.Errorf("invalid LLM response")
+	ErrMaxStepsExceeded         = fmt.Errorf("maximum steps exceeded")
+	ErrConfirmationDenied       = fmt.Errorf("user denied action confirmation")
+)
+
+type ToolExecutionError struct {
+	ToolName string
+	Err      error
+}
+
+func (e *ToolExecutionError) Error() string {
+	return fmt.Sprintf("tool %s execution failed: %v", e.ToolName, e.Err.Error())
+}
+
+func (e *ToolExecutionError) Unwrap() error {
+	return e.Err
+}
+
+type ContextError struct {
+	BudgetUsed int
+	BudgetMax  int
+}
+
+func (e *ContextError) Error() string {
+	return fmt.Sprintf("context usage: %d/%d tokens", e.BudgetUsed, e.BudgetMax)
+}
+
+type SecurityError struct {
+	Operation string
+	Reason    string
+}
+
+func (e *SecurityError) Unwrap() error {
+	return fmt.Errorf("%w: %s - %s", ErrSecurityRequired, e.Operation, e.Reason)
+}
+
+func (e *SecurityError) Error() string {
+	return fmt.Sprintf("security: %s - %s", e.Operation, e.Reason)
+}
+
+
+

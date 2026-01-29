@@ -1,0 +1,1472 @@
+package extractor
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/stannisl/ai-browser-assistant/internal/logger"
+	"github.com/stannisl/ai-browser-assistant/internal/types"
+)
+
+// MockPage implements rod.Page interface for testing
+type MockPage struct {
+	url                 string
+	title               string
+	evalResult          *mockEvalResult
+	elementProperty     string
+	pageError           error
+	elementCallCount    map[string]int
+	elementEvalCallCount int
+}
+
+type mockEvalResult struct {
+	JSONStr string
+}
+
+func NewMockPage() *MockPage {
+	return &MockPage{
+		elementCallCount: make(map[string]int),
+	}
+}
+
+// Info implements rod.Page.Info()
+func (m *MockPage) Info() (*rod.TargetTargetInfo, error) {
+	if m.pageError != nil {
+		return nil, m.pageError
+	}
+	return &rod.TargetTargetInfo{
+		URL: m.url,
+		Title: m.title,
+	}, nil
+}
+
+// MustElement implements rod.Page.MustElement()
+func (m *MockPage) MustElement(selector string) *rod.Element {
+	m.elementCallCount[selector]++
+	return &MockElement{}
+}
+
+// MustProperty implements rod.Page.MustProperty()
+func (m *MockPage) MustProperty(name string) string {
+	if m.elementProperty != "" {
+		return m.elementProperty
+	}
+	switch name {
+	case "title":
+		return "Test Page"
+	case "location.href":
+		return m.url
+	default:
+		return ""
+	}
+}
+
+// MustEval implements rod.Page.MustEval()
+func (m *MockPage) MustEval(code string) interface{} {
+	m.elementEvalCallCount++
+	return m.evalResult
+}
+
+// Browser implements rod.Page.Browser()
+func (m *MockPage) Browser() *rod.Browser {
+	return &rod.Browser{}
+}
+
+// Elements implements rod.Page.Elements()
+func (m *MockPage) Elements(selector string) ([]*rod.Element, error) {
+	return []*rod.Element{}, nil
+}
+
+// Element implements rod.Page.Element()
+func (m *MockPage) Element(selector string) (*rod.Element, error) {
+	return &rod.Element{}, nil
+}
+
+// Frame implements rod.Page.Frame()
+func (m *MockPage) Frame() *rod.Frame {
+	return &rod.Frame{}
+}
+
+// WaitLoadState implements rod.Page.WaitLoadState()
+func (m *MockPage) WaitLoadState(state string) error {
+	return nil
+}
+
+// MustNavigate implements rod.Page.MustNavigate()
+func (m *MockPage) MustNavigate(url string) {
+	// No-op for testing
+}
+
+// Navigate implements rod.Page.Navigate()
+func (m *MockPage) Navigate(url string) error {
+	return nil
+}
+
+// SetEvalResult sets the eval result for testing
+func (m *MockPage) SetEvalResult(jsonStr string) {
+	m.evalResult = &mockEvalResult{JSONStr: jsonStr}
+}
+
+// SetPageError sets a page error for testing
+func (m *MockPage) SetPageError(err error) {
+	m.pageError = err
+}
+
+// GetURL returns the mock URL
+func (m *MockPage) GetURL() string {
+	return m.url
+}
+
+// MockElement implements rod.Element
+type MockElement struct{}
+
+func (m *MockElement) String() string {
+	return "mock element"
+}
+
+func (m *MockElement) Property(name string) (interface{}, error) {
+	return nil, nil
+}
+
+func (m *MockElement) MustProperty(name string) string {
+	return ""
+}
+
+func (m *MockElement) Eval(code string) interface{} {
+	return nil
+}
+
+func (m *MockElement) MustEval(code string) interface{} {
+	return nil
+}
+
+func (m *MockElement) Click() error {
+	return nil
+}
+
+func (m *MockElement) Input(text string) error {
+	return nil
+}
+
+// TestExtractor_New tests the Extractor constructor
+func TestExtractor_New(t *testing.T) {
+	tests := []struct {
+		name        string
+		page        *MockPage
+		logger      *logger.Logger
+		expectError bool
+	}{
+		{
+			name:        "happy path with page and logger",
+			page:        NewMockPage(),
+			logger:      &logger.Logger{},
+			expectError: false,
+		},
+		{
+			name:        "happy path with page only",
+			page:        NewMockPage(),
+			logger:      nil,
+			expectError: false,
+		},
+		{
+			name:        "happy path with logger only",
+			page:        nil,
+			logger:      &logger.Logger{},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := New(tt.page, tt.logger)
+
+			if e == nil {
+				t.Error("Expected Extractor to be created, got nil")
+				return
+			}
+
+			if e.page != tt.page {
+				t.Errorf("Expected page to be %v, got %v", tt.page, e.page)
+			}
+
+			if e.logger != tt.logger {
+				t.Errorf("Expected logger to be %v, got %v", tt.logger, e.logger)
+			}
+		})
+	}
+}
+
+// TestExtractor_Extract tests the Extract method with various scenarios
+func TestExtractor_Extract(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func(*MockPage)
+		expectedErr string
+		checkResult func(*testing.T, *types.PageState)
+	}{
+		{
+			name: "happy path with multiple elements",
+			setupMock: func(m *MockPage) {
+				jsResult := []map[string]interface{}{
+					{
+						"type":        "button",
+						"text":        "Click Me",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > button:nth-of-type(1)",
+					},
+					{
+						"type":        "input",
+						"text":        "",
+						"placeholder": "Enter text",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "text",
+						"selector":    "body > input:nth-of-type(1)",
+					},
+					{
+						"type":        "a",
+						"text":        "Visit GitHub",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "https://github.com",
+						"inputType":   "",
+						"selector":    "body > a:nth-of-type(1)",
+					},
+				}
+				
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				m.url = "https://example.com"
+				m.title = "Example Domain"
+			},
+			expectedErr: "",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if state.Title != "Example Domain" {
+					t.Errorf("Expected title 'Example Domain', got '%s'", state.Title)
+				}
+				if state.URL != "https://example.com" {
+					t.Errorf("Expected URL 'https://example.com', got '%s'", state.URL)
+				}
+				if state.ElementCount != 3 {
+					t.Errorf("Expected 3 elements, got %d", state.ElementCount)
+				}
+				if state.InputCount != 1 {
+					t.Errorf("Expected 1 input, got %d", state.InputCount)
+				}
+				if state.ButtonCount != 1 {
+					t.Errorf("Expected 1 button, got %d", state.ButtonCount)
+				}
+				if state.LinkCount != 1 {
+					t.Errorf("Expected 1 link, got %d", state.LinkCount)
+				}
+				if !state.HasModal {
+					t.Error("Expected hasModal to be true")
+				}
+				if len(state.Elements) != 3 {
+					t.Errorf("Expected 3 elements in slice, got %d", len(state.Elements))
+				}
+			},
+		},
+		{
+			name: "happy path with no elements",
+			setupMock: func(m *MockPage) {
+				m.SetEvalResult(`{"elements": [], "hasModal": false}`)
+				m.url = "https://example.com"
+				m.title = "Empty Page"
+			},
+			expectedErr: "",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if state.ElementCount != 0 {
+					t.Errorf("Expected 0 elements, got %d", state.ElementCount)
+				}
+				if state.InputCount != 0 {
+					t.Errorf("Expected 0 inputs, got %d", state.InputCount)
+				}
+				if state.ButtonCount != 0 {
+					t.Errorf("Expected 0 buttons, got %d", state.ButtonCount)
+				}
+				if state.LinkCount != 0 {
+					t.Errorf("Expected 0 links, got %d", state.LinkCount)
+				}
+			},
+		},
+		{
+			name: "empty page with no content",
+			setupMock: func(m *MockPage) {
+				m.SetEvalResult(`{"elements": [], "hasModal": false}`)
+				m.url = ""
+				m.title = ""
+			},
+			expectedErr: "",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if state.Title != "" {
+					t.Errorf("Expected empty title, got '%s'", state.Title)
+				}
+				if state.URL != "" {
+					t.Errorf("Expected empty URL, got '%s'", state.URL)
+				}
+			},
+		},
+		{
+			name: "has modal detection",
+			setupMock: func(m *MockPage) {
+				m.SetEvalResult(`{"elements": [{"type": "button", "text": "OK", "placeholder": "", "ariaLabel": "", "href": "", "inputType": "", "selector": "body > button:nth-of-type(1)"}], "hasModal": true}`)
+				m.url = "https://example.com"
+				m.title = "Modal Test"
+			},
+			expectedErr: "",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if !state.HasModal {
+					t.Error("Expected hasModal to be true")
+				}
+				if state.ElementCount != 1 {
+					t.Errorf("Expected 1 element, got %d", state.ElementCount)
+				}
+			},
+		},
+		{
+			name: "element truncation (max 50)",
+			setupMock: func(m *MockPage) {
+				// Create 60 elements (should be truncated to 50)
+				jsResult := make([]map[string]interface{}, 60)
+				for i := 0; i < 60; i++ {
+					jsResult[i] = map[string]interface{}{
+						"type":        "button",
+						"text":        fmt.Sprintf("Button %d", i),
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    fmt.Sprintf("body > button:nth-of-type(%d)", i+1),
+					}
+				}
+				
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				m.url = "https://example.com"
+				m.title = "Many Elements"
+			},
+			expectedErr: "",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if state.ElementCount != 60 {
+					t.Errorf("Expected 60 elements total, got %d", state.ElementCount)
+				}
+				if len(state.Elements) != 50 {
+					t.Errorf("Expected 50 elements in slice, got %d", len(state.Elements))
+				}
+				if !strings.Contains(state.Content, "Showing 50 of 60 elements") {
+					t.Errorf("Expected content to show truncation info, got '%s'", state.Content)
+				}
+			},
+		},
+		{
+			name: "context cancellation",
+			setupMock: func(m *MockPage) {
+				// Page.Info will fail due to context cancellation
+				m.SetPageError(context.Canceled)
+			},
+			expectedErr: "context canceled",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if state != nil {
+					t.Error("Expected nil state on context cancellation")
+				}
+			},
+		},
+		{
+			name: "JSON parsing error",
+			setupMock: func(m *MockPage) {
+				m.SetEvalResult(`{invalid json}`)
+				m.url = "https://example.com"
+				m.title = "Test Page"
+			},
+			expectedErr: "JSON unmarshal failed",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if state != nil {
+					t.Error("Expected nil state on JSON error")
+				}
+			},
+		},
+		{
+			name: "page error",
+			setupMock: func(m *MockPage) {
+				m.SetPageError(errors.New("page load error"))
+			},
+			expectedErr: "page load error",
+			checkResult: func(t *testing.T, state *types.PageState) {
+				if state != nil {
+					t.Error("Expected nil state on page error")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockPage := NewMockPage()
+			tt.setupMock(mockPage)
+			
+			e := New(mockPage, nil)
+			result, err := e.Extract(context.Background())
+			
+			if tt.expectedErr == "" {
+				if err != nil {
+					t.Errorf("Expected no error, got: %v", err)
+				}
+				if result == nil {
+					t.Error("Expected non-nil result on success")
+					return
+				}
+				tt.checkResult(t, result)
+			} else {
+				if err == nil {
+					t.Error("Expected error, got nil")
+					return
+				}
+				if tt.expectedErr == "" || !strings.Contains(err.Error(), tt.expectedErr) {
+					t.Errorf("Expected error containing '%s', got: %v", tt.expectedErr, err)
+				}
+				if result != nil {
+					t.Error("Expected nil result on error")
+				}
+			}
+		})
+	}
+}
+
+// TestExtractor_GetSelector tests the GetSelector method
+func TestExtractor_GetSelector(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(*Extractor)
+		elementID   int
+		expectedErr string
+		expectedSel string
+	}{
+		{
+			name: "existing ID",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				m.SetEvalResult(`{"elements": [{"type": "button", "text": "Click", "placeholder": "", "ariaLabel": "", "href": "", "inputType": "", "selector": "body > button:nth-of-type(1)"}], "hasModal": false}`)
+				e.Extract(context.Background())
+			},
+			elementID:   0,
+			expectedErr: "",
+			expectedSel: "body > button:nth-of-type(1)",
+		},
+		{
+			name: "non-existent ID",
+			setup: func(e *Extractor) {
+				// No elements to extract
+				m := e.page.(*MockPage)
+				m.SetEvalResult(`{"elements": [], "hasModal": false}`)
+				e.Extract(context.Background())
+			},
+			elementID:   0,
+			expectedErr: "element not found",
+			expectedSel: "",
+		},
+		{
+			name: "concurrent access",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				jsResult := []map[string]interface{}{
+					{
+						"type":        "button",
+						"text":        "Click 1",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > button:nth-of-type(1)",
+					},
+					{
+						"type":        "button",
+						"text":        "Click 2",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > button:nth-of-type(2)",
+					},
+				}
+				
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				e.Extract(context.Background())
+			},
+			elementID:   0,
+			expectedErr: "",
+			expectedSel: "body > button:nth-of-type(1)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockPage := NewMockPage()
+			tt.setup(&Extractor{page: mockPage})
+			
+			e := New(mockPage, nil)
+			selector, err := e.GetSelector(tt.elementID)
+			
+			if tt.expectedErr == "" {
+				if err != nil {
+					t.Errorf("Expected no error, got: %v", err)
+				}
+				if selector != tt.expectedSel {
+					t.Errorf("Expected selector '%s', got '%s'", tt.expectedSel, selector)
+				}
+			} else {
+				if err == nil {
+					t.Error("Expected error, got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.expectedErr) {
+					t.Errorf("Expected error containing '%s', got: %v", tt.expectedErr, err)
+				}
+				if selector != "" {
+					t.Errorf("Expected empty selector, got '%s'", selector)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractor_FormatForLLM tests the FormatForLLM method
+func TestExtractor_FormatForLLM(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*Extractor)
+		state   *types.PageState
+		check   func(*testing.T, string)
+	}{
+		{
+			name: "multiple page elements",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				jsResult := []map[string]interface{}{
+					{
+						"type":        "button",
+						"text":        "Submit",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > button:nth-of-type(1)",
+					},
+					{
+						"type":        "input",
+						"text":        "",
+						"placeholder": "Email",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "email",
+						"selector":    "body > input:nth-of-type(1)",
+					},
+					{
+						"type":        "a",
+						"text":        "GitHub",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "https://github.com",
+						"inputType":   "",
+						"selector":    "body > a:nth-of-type(1)",
+					},
+				}
+				
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				m.url = "https://example.com"
+				m.title = "Test Page"
+			},
+			state: nil,
+			check: func(t *testing.T, formatted string) {
+				if !strings.Contains(formatted, "Page: Test Page") {
+					t.Errorf("Expected formatted output to contain page title")
+				}
+				if !strings.Contains(formatted, "URL: https://example.com") {
+					t.Errorf("Expected formatted output to contain URL")
+				}
+				if !strings.Contains(formatted, "[Input Fields]") {
+					t.Errorf("Expected formatted output to contain input fields section")
+				}
+				if !strings.Contains(formatted, "[Buttons]") {
+					t.Errorf("Expected formatted output to contain buttons section")
+				}
+				if !strings.Contains(formatted, "[Links - first 20]") {
+					t.Errorf("Expected formatted output to contain links section")
+				}
+				if !strings.Contains(formatted, "Total:") {
+					t.Errorf("Expected formatted output to contain total count")
+				}
+				if !strings.Contains(formatted, "Shown:") {
+					t.Errorf("Expected formatted output to contain shown count")
+				}
+			},
+		},
+		{
+			name: "single element",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				m.SetEvalResult(`{"elements": [{"type": "button", "text": "OK", "placeholder": "", "ariaLabel": "", "href": "", "inputType": "", "selector": "body > button:nth-of-type(1)"}], "hasModal": false}`)
+				m.url = "https://example.com"
+				m.title = "Single Element Page"
+			},
+			state: nil,
+			check: func(t *testing.T, formatted string) {
+				if !strings.Contains(formatted, "Page: Single Element Page") {
+					t.Errorf("Expected formatted output to contain page title")
+				}
+				if !strings.Contains(formatted, "[Buttons]") {
+					t.Errorf("Expected formatted output to contain buttons section")
+				}
+			},
+		},
+		{
+			name: "has modal",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				m.SetEvalResult(`{"elements": [{"type": "button", "text": "Yes", "placeholder": "", "ariaLabel": "", "href": "", "inputType": "", "selector": "body > button:nth-of-type(1)"}], "hasModal": true}`)
+				m.url = "https://example.com"
+				m.title = "Modal Page"
+			},
+			state: nil,
+			check: func(t *testing.T, formatted string) {
+				if !strings.Contains(formatted, "[!!! MODAL WINDOW ACTIVE !!!]") {
+					t.Errorf("Expected formatted output to contain modal alert")
+				}
+			},
+		},
+		{
+			name: "input fields only",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				jsResult := []map[string]interface{}{
+					{
+						"type":        "input",
+						"text":        "",
+						"placeholder": "Username",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "text",
+						"selector":    "body > input:nth-of-type(1)",
+					},
+					{
+						"type":        "input",
+						"text":        "",
+						"placeholder": "Password",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "password",
+						"selector":    "body > input:nth-of-type(2)",
+					},
+				}
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				m.url = "https://example.com"
+				m.title = "Login Page"
+			},
+			state: nil,
+			check: func(t *testing.T, formatted string) {
+				if !strings.Contains(formatted, "[Input Fields]") {
+					t.Errorf("Expected formatted output to contain input fields section")
+				}
+				if strings.Contains(formatted, "[Buttons]") {
+					t.Errorf("Expected no buttons section")
+				}
+				if strings.Contains(formatted, "[Links]") {
+					t.Errorf("Expected no links section")
+				}
+			},
+		},
+		{
+			name: "buttons only",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				jsResult := []map[string]interface{}{
+					{
+						"type":        "button",
+						"text":        "Submit",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > button:nth-of-type(1)",
+					},
+					{
+						"type":        "button",
+						"text":        "Cancel",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > button:nth-of-type(2)",
+					},
+				}
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				m.url = "https://example.com"
+				m.title = "Buttons Only"
+			},
+			state: nil,
+			check: func(t *testing.T, formatted string) {
+				if !strings.Contains(formatted, "[Buttons]") {
+					t.Errorf("Expected formatted output to contain buttons section")
+				}
+				if strings.Contains(formatted, "[Input Fields]") {
+					t.Errorf("Expected no input fields section")
+				}
+				if strings.Contains(formatted, "[Links]") {
+					t.Errorf("Expected no links section")
+				}
+			},
+		},
+		{
+			name: "links only",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				jsResult := []map[string]interface{}{
+					{
+						"type":        "a",
+						"text":        "GitHub",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "https://github.com",
+						"inputType":   "",
+						"selector":    "body > a:nth-of-type(1)",
+					},
+					{
+						"type":        "a",
+						"text":        "Twitter",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "https://twitter.com",
+						"inputType":   "",
+						"selector":    "body > a:nth-of-type(2)",
+					},
+				}
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				m.url = "https://example.com"
+				m.title = "Links Only"
+			},
+			state: nil,
+			check: func(t *testing.T, formatted string) {
+				if !strings.Contains(formatted, "[Links - first 20]") {
+					t.Errorf("Expected formatted output to contain links section")
+				}
+				if strings.Contains(formatted, "[Input Fields]") {
+					t.Errorf("Expected no input fields section")
+				}
+				if strings.Contains(formatted, "[Buttons]") {
+					t.Errorf("Expected no buttons section")
+				}
+			},
+		},
+		{
+			name: "complex page structure",
+			setup: func(e *Extractor) {
+				m := e.page.(*MockPage)
+				jsResult := []map[string]interface{}{
+					{
+						"type":        "input",
+						"text":        "",
+						"placeholder": "Email",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "email",
+						"selector":    "body > form:nth-of-type(1) > input:nth-of-type(1)",
+					},
+					{
+						"type":        "button",
+						"text":        "Submit",
+						"placeholder": "",
+						"ariaLabel":   "Submit form",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > form:nth-of-type(1) > button:nth-of-type(1)",
+					},
+					{
+						"type":        "a",
+						"text":        "Forgot password",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "https://example.com/forgot",
+						"inputType":   "",
+						"selector":    "body > a:nth-of-type(1)",
+					},
+					{
+						"type":        "select",
+						"text":        "Select country",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "select",
+						"selector":    "body > select:nth-of-type(1)",
+					},
+					{
+						"type":        "textarea",
+						"text":        "Message",
+						"placeholder": "",
+						"ariaLabel":   "",
+						"href":        "",
+						"inputType":   "",
+						"selector":    "body > textarea:nth-of-type(1)",
+					},
+				}
+				elementsJSON, _ := json.Marshal(map[string]interface{}{
+					"elements":   jsResult,
+					"hasModal":   false,
+				})
+				m.SetEvalResult(string(elementsJSON))
+				m.url = "https://example.com/register"
+				m.title = "Registration Form"
+			},
+			state: nil,
+			check: func(t *testing.T, formatted string) {
+				if !strings.Contains(formatted, "Page: Registration Form") {
+					t.Errorf("Expected formatted output to contain page title")
+				}
+				if !strings.Contains(formatted, "URL: https://example.com/register") {
+					t.Errorf("Expected formatted output to contain URL")
+				}
+				if !strings.Contains(formatted, "[Input Fields]") {
+					t.Errorf("Expected formatted output to contain input fields section")
+				}
+				if !strings.Contains(formatted, "[Buttons]") {
+					t.Errorf("Expected formatted output to contain buttons section")
+				}
+				if !strings.Contains(formatted, "[Links - first 20]") {
+					t.Errorf("Expected formatted output to contain links section")
+				}
+				if !strings.Contains(formatted, "Total:") {
+					t.Errorf("Expected formatted output to contain total count")
+				}
+				if !strings.Contains(formatted, "Shown:") {
+					t.Errorf("Expected formatted output to contain shown count")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockPage := NewMockPage()
+			tt.setup(&Extractor{page: mockPage})
+			
+			e := New(mockPage, nil)
+			pageState, err := e.Extract(context.Background())
+			
+			if err != nil {
+				t.Fatalf("Extract failed: %v", err)
+			}
+			
+			formatted := e.FormatForLLM(pageState)
+			tt.check(t, formatted)
+		})
+	}
+}
+
+// TestFormatElement tests the formatElement helper function
+func TestFormatElement(t *testing.T) {
+	tests := []struct {
+		name     string
+		element  types.PageElement
+		expected string
+	}{
+		{
+			name: "element with text",
+			element: types.PageElement{
+				ID:   1,
+				Tag:  "button",
+				Text: "Click Me",
+				Attributes: map[string]string{
+					"placeholder": "",
+					"aria-label":  "",
+				},
+			},
+			expected: "[1] button \"Click Me\"",
+		},
+		{
+			name: "element with placeholder",
+			element: types.PageElement{
+				ID:   2,
+				Tag:  "input",
+				Text: "",
+				Attributes: map[string]string{
+					"placeholder": "Enter text",
+					"aria-label":  "",
+				},
+			},
+			expected: "[2] input  placeholder=\"Enter text\"",
+		},
+		{
+			name: "link with href",
+			element: types.PageElement{
+				ID:   3,
+				Tag:  "a",
+				Text: "Visit GitHub",
+				Attributes: map[string]string{
+					"placeholder": "",
+					"aria-label":  "",
+					"href":        "https://github.com",
+				},
+			},
+			expected: "[3] a \"Visit GitHub\" → https://github.com",
+		},
+		{
+			name: "element with both text and placeholder",
+			element: types.PageElement{
+				ID:   4,
+				Tag:  "button",
+				Text: "Submit",
+				Attributes: map[string]string{
+					"placeholder": "Click to submit",
+					"aria-label":  "",
+				},
+			},
+			expected: "[4] button \"Submit\" placeholder=\"Click to submit\"",
+		},
+		{
+			name: "element with text truncated at 40 chars",
+			element: types.PageElement{
+				ID:   5,
+				Tag:  "button",
+				Text: strings.Repeat("A", 50),
+				Attributes: map[string]string{
+					"placeholder": "",
+					"aria-label":  "",
+				},
+			},
+			expected: "[5] button \"AAAAAAAAAAAAAAA...", // truncated
+		},
+		{
+			name: "element with placeholder truncated at 25 chars",
+			element: types.PageElement{
+				ID:   6,
+				Tag:  "input",
+				Text: "",
+				Attributes: map[string]string{
+					"placeholder": strings.Repeat("B", 30),
+					"aria-label":  "",
+				},
+			},
+			expected: "[6] input  placeholder=\"BBBBBBBBB...", // truncated
+		},
+		{
+			name: "link with long href truncated at 50 chars",
+			element: types.PageElement{
+				ID:   7,
+				Tag:  "a",
+				Text: "Long Link",
+				Attributes: map[string]string{
+					"placeholder": "",
+					"aria-label":  "",
+					"href":        strings.Repeat("C", 60),
+				},
+			},
+			expected: "[7] a \"Long Link\" → CCCCCCCCCCC...", // truncated
+		},
+		{
+			name: "element with empty text and placeholder",
+			element: types.PageElement{
+				ID:   8,
+				Tag:  "span",
+				Text: "",
+				Attributes: map[string]string{
+					"placeholder": "",
+					"aria-label":  "",
+				},
+			},
+			expected: "[8] span ",
+		},
+		{
+			name: "element with aria-label",
+			element: types.PageElement{
+				ID:   9,
+				Tag:  "button",
+				Text: "Click",
+				Attributes: map[string]string{
+					"placeholder": "",
+					"aria-label":  "Submit button",
+				},
+			},
+			expected: "[9] button \"Click\"  aria-label=\"Submit button\"",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a new Extractor to access formatElement
+			mockPage := NewMockPage()
+			e := New(mockPage, nil)
+			
+			result := e.formatElement(tt.element)
+			
+			if !strings.Contains(result, tt.expected) {
+				t.Errorf("Expected result to contain '%s', got '%s'", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestTruncateHelper tests the truncate helper function
+func TestTruncateHelper(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxLen   int
+		expected string
+	}{
+		{
+			name:     "short string unchanged",
+			input:    "Hello",
+			maxLen:   100,
+			expected: "Hello",
+		},
+		{
+			name:     "exact length string unchanged",
+			input:    "Hello",
+			maxLen:   5,
+			expected: "Hello",
+		},
+		{
+			name:     "long string truncated",
+			input:    "Hello World",
+			maxLen:   5,
+			expected: "Hello...",
+		},
+		{
+			name:     "string longer than max",
+			input:    "This is a very long string that should be truncated",
+			maxLen:   20,
+			expected: "This is a very very long st...",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			maxLen:   10,
+			expected: "",
+		},
+		{
+			name:     "maxLen is 0",
+			input:    "Hello",
+			maxLen:   0,
+			expected: "",
+		},
+		{
+			name:     "maxLen is negative",
+			input:    "Hello",
+			maxLen:   -1,
+			expected: "Hello",
+		},
+		{
+			name:     "maxLen is 1",
+			input:    "Hello",
+			maxLen:   1,
+			expected: "H...",
+		},
+		{
+			name:     "Unicode characters",
+			input:    "Привет мир",
+			maxLen:   3,
+			expected: "П...",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := truncate(tt.input, tt.maxLen)
+			
+			if result != tt.expected {
+				t.Errorf("Expected '%s', got '%s'", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestMinHelper tests the min helper function
+func TestMinHelper(t *testing.T) {
+	tests := []struct {
+		name     string
+		a        int
+		b        int
+		expected int
+	}{
+		{
+			name:     "a is smaller",
+			a:        3,
+			b:        10,
+			expected: 3,
+		},
+		{
+			name:     "b is smaller",
+			a:        10,
+			b:        3,
+			expected: 3,
+		},
+		{
+			name:     "a equals b",
+			a:        5,
+			b:        5,
+			expected: 5,
+		},
+		{
+			name:     "both are 0",
+			a:        0,
+			b:        0,
+			expected: 0,
+		},
+		{
+			name:     "negative numbers",
+			a:        -5,
+			b:        -3,
+			expected: -5,
+		},
+		{
+			name:     "one is negative",
+			a:        10,
+			b:        -5,
+			expected: -5,
+		},
+		{
+			name:     "large numbers",
+			a:        1000000,
+			b:        999999,
+			expected: 999999,
+		},
+		{
+			name:     "very large numbers",
+			a:        2147483647,
+			b:        2147483646,
+			expected: 2147483646,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := min(tt.a, tt.b)
+			
+			if result != tt.expected {
+				t.Errorf("Expected %d, got %d", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestContextCancellation tests context cancellation during Extract
+func TestContextCancellation(t *testing.T) {
+	mockPage := NewMockPage()
+	mockPage.SetPageError(context.Canceled)
+	
+	e := New(mockPage, nil)
+	_, err := e.Extract(context.Background())
+	
+	if err == nil {
+		t.Error("Expected error on context cancellation, got nil")
+		return
+	}
+	
+	if !strings.Contains(err.Error(), "context canceled") {
+		t.Errorf("Expected error containing 'context canceled', got: %v", err)
+	}
+}
+
+// TestMaxElementsTruncation tests that maxElements limit is enforced
+func TestMaxElementsTruncation(t *testing.T) {
+	mockPage := NewMockPage()
+	
+	// Create 60 elements
+	jsResult := make([]map[string]interface{}, 60)
+	for i := 0; i < 60; i++ {
+		jsResult[i] = map[string]interface{}{
+			"type":        "button",
+			"text":        fmt.Sprintf("Button %d", i),
+			"placeholder": "",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "",
+			"selector":    fmt.Sprintf("body > button:nth-of-type(%d)", i+1),
+		}
+	}
+	
+	elementsJSON, _ := json.Marshal(map[string]interface{}{
+		"elements":   jsResult,
+		"hasModal":   false,
+	})
+	mockPage.SetEvalResult(string(elementsJSON))
+	mockPage.url = "https://example.com"
+	mockPage.title = "Many Elements Page"
+	
+	e := New(mockPage, nil)
+	state, err := e.Extract(context.Background())
+	
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	
+	// Verify total elements count
+	if state.ElementCount != 60 {
+		t.Errorf("Expected ElementCount to be 60, got %d", state.ElementCount)
+	}
+	
+	// Verify actual slice has only 50 elements
+	if len(state.Elements) != 50 {
+		t.Errorf("Expected 50 elements in slice, got %d", len(state.Elements))
+	}
+	
+	// Verify content mentions truncation
+	if !strings.Contains(state.Content, "Showing 50 of 60 elements") {
+		t.Errorf("Expected content to show truncation, got: %s", state.Content)
+	}
+}
+
+// TestPageStateTimestamp tests that timestamp is set correctly
+func TestPageStateTimestamp(t *testing.T) {
+	mockPage := NewMockPage()
+	mockPage.SetEvalResult(`{"elements": [], "hasModal": false}`)
+	mockPage.url = "https://example.com"
+	mockPage.title = "Test Page"
+	
+	e := New(mockPage, nil)
+	state, err := e.Extract(context.Background())
+	
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	
+	if state.Timestamp.IsZero() {
+		t.Error("Expected non-zero timestamp")
+	}
+	
+	// Timestamp should be within 1 second of now
+	timeDiff := time.Since(state.Timestamp)
+	if timeDiff > time.Second {
+		t.Errorf("Timestamp too old: %v", timeDiff)
+	}
+}
+
+// TestSelectorIDIncrement tests that selector IDs increment correctly
+func TestSelectorIDIncrement(t *testing.T) {
+	mockPage := NewMockPage()
+	
+	jsResult := []map[string]interface{}{
+		{
+			"type":        "button",
+			"text":        "Button 1",
+			"placeholder": "",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "",
+			"selector":    "body > button:nth-of-type(1)",
+		},
+		{
+			"type":        "button",
+			"text":        "Button 2",
+			"placeholder": "",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "",
+			"selector":    "body > button:nth-of-type(2)",
+		},
+		{
+			"type":        "button",
+			"text":        "Button 3",
+			"placeholder": "",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "",
+			"selector":    "body > button:nth-of-type(3)",
+		},
+	}
+	
+	elementsJSON, _ := json.Marshal(map[string]interface{}{
+		"elements":   jsResult,
+		"hasModal":   false,
+	})
+	mockPage.SetEvalResult(string(elementsJSON))
+	mockPage.url = "https://example.com"
+	mockPage.title = "Test Page"
+	
+	e := New(mockPage, nil)
+	e.Extract(context.Background())
+	
+	// Get each selector by ID
+	selector1, _ := e.GetSelector(0)
+	selector2, _ := e.GetSelector(1)
+	selector3, _ := e.GetSelector(2)
+	
+	if selector1 != "body > button:nth-of-type(1)" {
+		t.Errorf("Expected selector 0, got: %s", selector1)
+	}
+	if selector2 != "body > button:nth-of-type(2)" {
+		t.Errorf("Expected selector 1, got: %s", selector2)
+	}
+	if selector3 != "body > button:nth-of-type(3)" {
+		t.Errorf("Expected selector 2, got: %s", selector3)
+	}
+}
+
+// TestGetSelectorAfterExtraction tests retrieving selectors after multiple extractions
+func TestGetSelectorAfterExtraction(t *testing.T) {
+	mockPage := NewMockPage()
+	
+	// First extraction with 3 elements
+	jsResult1 := []map[string]interface{}{
+		{
+			"type":        "button",
+			"text":        "Button 1",
+			"placeholder": "",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "",
+			"selector":    "body > button:nth-of-type(1)",
+		},
+		{
+			"type":        "button",
+			"text":        "Button 2",
+			"placeholder": "",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "",
+			"selector":    "body > button:nth-of-type(2)",
+		},
+	}
+	
+	elementsJSON1, _ := json.Marshal(map[string]interface{}{
+		"elements":   jsResult1,
+		"hasModal":   false,
+	})
+	mockPage.SetEvalResult(string(elementsJSON1))
+	mockPage.url = "https://example.com"
+	mockPage.title = "First Page"
+	
+	e := New(mockPage, nil)
+	e.Extract(context.Background())
+	
+	selector0, _ := e.GetSelector(0)
+	if selector0 != "body > button:nth-of-type(1)" {
+		t.Errorf("Expected selector 0, got: %s", selector0)
+	}
+	
+	// Second extraction with different elements
+	jsResult2 := []map[string]interface{}{
+		{
+			"type":        "input",
+			"text":        "",
+			"placeholder": "Username",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "text",
+			"selector":    "body > input:nth-of-type(1)",
+		},
+		{
+			"type":        "input",
+			"text":        "",
+			"placeholder": "Password",
+			"ariaLabel":   "",
+			"href":        "",
+			"inputType":   "password",
+			"selector":    "body > input:nth-of-type(2)",
+		},
+	}
+	
+	elementsJSON2, _ := json.Marshal(map[string]interface{}{
+		"elements":   jsResult2,
+		"hasModal":   false,
+	})
+	mockPage.SetEvalResult(string(elementsJSON2))
+	mockPage.url = "https://example.com"
+	mockPage.title = "Second Page"
+	
+	e.Extract(context.Background())
+	
+	selector0, _ = e.GetSelector(0)
+	if selector0 != "body > input:nth-of-type(1)" {
+		t.Errorf("Expected selector 0 to be from second extraction, got: %s", selector0)
+	}
+}
+
+// TestElementAttributes tests that all attributes are stored correctly
+func TestElementAttributes(t *testing.T) {
+	mockPage := NewMockPage()
+	
+	jsResult := []map[string]interface{}{
+		{
+			"type":        "input",
+			"text":        "",
+			"placeholder": "Email address",
+			"ariaLabel":   "Email input",
+			"href":        "",
+			"inputType":   "email",
+			"selector":    "body > form:nth-of-type(1) > input:nth-of-type(1)",
+		},
+	}
+	
+	elementsJSON, _ := json.Marshal(map[string]interface{}{
+		"elements":   jsResult,
+		"hasModal":   false,
+	})
+	mockPage.SetEvalResult(string(elementsJSON))
+	mockPage.url = "https://example.com"
+	mockPage.title = "Test Page"
+	
+	e := New(mockPage, nil)
+	state, err := e.Extract(context.Background())
+	
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	
+	if len(state.Elements) != 1 {
+		t.Fatalf("Expected 1 element, got %d", len(state.Elements))
+	}
+	
+	element := state.Elements[0]
+	
+	// Check all expected attributes
+	if element.Attributes["placeholder"] != "Email address" {
+		t.Errorf("Expected placeholder 'Email address', got '%s'", element.Attributes["placeholder"])
+	}
+	
+	if element.Attributes["aria-label"] != "Email input" {
+		t.Errorf("Expected aria-label 'Email input', got '%s'", element.Attributes["aria-label"])
+	}
+	
+	if element.Attributes["type"] != "email" {
+		t.Errorf("Expected type 'email', got '%s'", element.Attributes["type"])
+	}
+	
+	if element.Attributes["href"] != "" {
+		t.Errorf("Expected empty href for input element, got '%s'", element.Attributes["href"])
+	}
+}

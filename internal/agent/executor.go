@@ -3,7 +3,6 @@ package agent
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -12,7 +11,7 @@ import (
 	"github.com/stannisl/ai-browser-assistant/internal/types"
 )
 
-func (a *Agent) executeExtractPage(ctx context.Context) (string, error) {
+func (a *Agent) ExecuteExtractPage(ctx context.Context, arguments map[string]interface{}) (string, error) {
 	state, err := a.extractor.Extract(ctx)
 	if err != nil {
 		return "", fmt.Errorf("extract page: %w", err)
@@ -20,127 +19,169 @@ func (a *Agent) executeExtractPage(ctx context.Context) (string, error) {
 	return a.extractor.FormatForLLM(state), nil
 }
 
-func (a *Agent) executeNavigate(ctx context.Context, input json.RawMessage) (string, error) {
-	var params struct {
-		URL string `json:"url"`
+func (a *Agent) ExecuteNavigate(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	url, ok := arguments["url"].(string)
+	if !ok || url == "" {
+		return "", fmt.Errorf("invalid URL argument: URL is required and must be a string")
 	}
-	
-	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse navigate: %w", err)
+
+	a.logger.Navigate(url)
+
+	if err := a.browser.Navigate(ctx, url); err != nil {
+		a.logger.Error("Navigation failed", err, "url", url)
+		return fmt.Sprintf("Error: navigation to %s failed: %v", url, err), nil
 	}
-	
-	a.logger.Navigate(params.URL)
-	
-	if err := a.browser.Navigate(ctx, params.URL); err != nil {
-		a.logger.Error("Navigation failed", err, "url", params.URL)
-		return fmt.Sprintf("Error: navigation to %s failed: %v", params.URL, err), nil
-	}
-	
-	return fmt.Sprintf("Navigated to %s. Call extract_page to see the page.", params.URL), nil
+
+	return fmt.Sprintf("Navigated to %s. Call extract_page to see the page.", url), nil
 }
 
-func (a *Agent) executeClick(ctx context.Context, input json.RawMessage) (string, error) {
-	var params struct {
-		ElementID int `json:"element_id"`
+func (a *Agent) ExecuteClick(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	elementID, ok := arguments["element_id"]
+	if !ok {
+		return "", fmt.Errorf("invalid element_id argument: element_id is required")
 	}
-	
-	if err := json.Unmarshal(input, &params); err != nil {
-		a.logger.Error("Failed to parse click input", err)
-		return "", fmt.Errorf("parse click input: %w, raw: %s", err, string(input))
+
+	id, ok := elementID.(float64)
+	if !ok {
+		return "", fmt.Errorf("invalid element_id argument: must be a number")
 	}
-	
-	a.logger.Debug("Click requested", "element_id", params.ElementID)
-	
-	selector, err := a.extractor.GetSelector(params.ElementID)
+
+	if id < 0 {
+		return "", fmt.Errorf("invalid element_id argument: must be non-negative")
+	}
+
+	a.logger.Debug("Click requested", "element_id", int(id))
+
+	selector, err := a.extractor.GetSelector(int(id))
 	if err != nil {
-		a.logger.Error("Element not found", err, "element_id", params.ElementID)
-		return fmt.Sprintf("Error: element [%d] not found. Call extract_page to refresh elements.", params.ElementID), nil
+		a.logger.Error("Element not found", err, "element_id", int(id))
+		return fmt.Sprintf("Error: element [%d] not found. Call extract_page to refresh elements.", int(id)), nil
 	}
-	
-	a.logger.Click(params.ElementID, selector)
-	
+
+	a.logger.Click(int(id), selector)
+
 	if err := a.browser.Click(ctx, selector); err != nil {
 		a.logger.Error("Click failed", err, "selector", selector)
-		return fmt.Sprintf("Error: click on [%d] failed: %v. Try another element.", params.ElementID, err), nil
+		return fmt.Sprintf("Error: click on [%d] failed: %v. Try another element.", int(id), err), nil
 	}
-	
-	return fmt.Sprintf("Clicked element [%d]. Call extract_page to see the result.", params.ElementID), nil
+
+	return fmt.Sprintf("Clicked element [%d]. Call extract_page to see the result.", int(id)), nil
 }
 
-func (a *Agent) executeTypeText(ctx context.Context, input json.RawMessage) (string, error) {
-	var params struct {
-		ElementID int    `json:"element_id"`
-		Text      string `json:"text"`
+func (a *Agent) ExecuteTypeText(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	elementID, ok := arguments["element_id"]
+	if !ok {
+		return "", fmt.Errorf("invalid element_id argument: element_id is required")
 	}
-	
-	if err := json.Unmarshal(input, &params); err != nil {
-		a.logger.Error("Failed to parse type_text input", err)
-		return "", fmt.Errorf("parse type_text: %w, raw: %s", err, string(input))
+
+	text, ok := arguments["text"]
+	if !ok {
+		return "", fmt.Errorf("invalid text argument: text is required")
 	}
-	
-	a.logger.Debug("Type text requested", "element_id", params.ElementID, "text", params.Text)
-	
-	if params.Text == "" {
+
+	id, ok := elementID.(float64)
+	if !ok {
+		return "", fmt.Errorf("invalid element_id argument: must be a number")
+	}
+
+	textStr, ok := text.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid text argument: must be a string")
+	}
+
+	if textStr == "" {
 		return "Error: text is empty. Provide text to type.", nil
 	}
-	
-	selector, err := a.extractor.GetSelector(params.ElementID)
+
+	a.logger.Debug("Type text requested", "element_id", int(id), "text", textStr)
+
+	selector, err := a.extractor.GetSelector(int(id))
 	if err != nil {
-		a.logger.Error("Element not found for typing", err, "element_id", params.ElementID)
-		return fmt.Sprintf("Error: element [%d] not found. Call extract_page first.", params.ElementID), nil
+		a.logger.Error("Element not found for typing", err, "element_id", int(id))
+		return fmt.Sprintf("Error: element [%d] not found. Call extract_page first.", int(id)), nil
 	}
-	
-	a.logger.Type(params.ElementID, params.Text)
-	
-	if err := a.browser.Type(ctx, selector, params.Text); err != nil {
+
+	a.logger.Type(int(id), textStr)
+
+	if err := a.browser.Type(ctx, selector, textStr); err != nil {
 		a.logger.Error("Type failed", err, "selector", selector)
-		return fmt.Sprintf("Error: typing into [%d] failed: %v", params.ElementID, err), nil
+		return fmt.Sprintf("Error: typing into [%d] failed: %v", int(id), err), nil
 	}
-	
-	return fmt.Sprintf("Typed '%s' into element [%d]. Now click search button or press Enter.", params.Text, params.ElementID), nil
+
+	return fmt.Sprintf("Typed '%s' into element [%d]. Now click search button or press Enter.", textStr, int(id)), nil
 }
 
-func (a *Agent) executeScroll(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	direction, ok := arguments["direction"].(string)
+func (a *Agent) ExecuteScroll(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	direction, ok := arguments["direction"]
 	if !ok {
-		return "", fmt.Errorf("invalid direction argument")
+		return "", fmt.Errorf("invalid direction argument: direction is required")
 	}
 
-	if err := a.browser.Scroll(ctx, direction); err != nil {
+	directionStr, ok := direction.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid direction argument: must be a string")
+	}
+
+	validDirections := map[string]bool{
+		"up":    true,
+		"down":  true,
+		"left":  true,
+		"right": true,
+	}
+
+	if !validDirections[directionStr] {
+		return "", fmt.Errorf("invalid direction argument: must be one of %v", validDirections)
+	}
+
+	if err := a.browser.Scroll(ctx, directionStr); err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Scrolled %s", direction), nil
+	return fmt.Sprintf("Scrolled %s", directionStr), nil
 }
 
-func (a *Agent) executeWait(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	seconds, ok := arguments["seconds"].(float64)
+func (a *Agent) ExecuteWait(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	seconds, ok := arguments["seconds"]
 	if !ok {
-		return "", fmt.Errorf("invalid seconds argument")
+		return "", fmt.Errorf("invalid seconds argument: seconds is required")
 	}
 
-	waitSeconds := int(seconds)
-	if waitSeconds < 1 {
-		waitSeconds = 1
-	}
-	if waitSeconds > 10 {
-		waitSeconds = 10
+	val, ok := seconds.(float64)
+	if !ok {
+		return "", fmt.Errorf("invalid seconds argument: must be a number")
 	}
 
-	time.Sleep(time.Duration(waitSeconds) * time.Second)
+	secondsInt := int(val)
+	if secondsInt < 1 {
+		return "", fmt.Errorf("invalid seconds argument: must be at least 1")
+	}
+	if secondsInt > 10 {
+		return "", fmt.Errorf("invalid seconds argument: must be at most 10")
+	}
 
-	return fmt.Sprintf("Waited %d seconds", waitSeconds), nil
+	time.Sleep(time.Duration(secondsInt) * time.Second)
+
+	return fmt.Sprintf("Waited %d seconds", secondsInt), nil
 }
 
-func (a *Agent) executeAskUser(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	question, ok := arguments["question"].(string)
+func (a *Agent) ExecuteAskUser(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	question, ok := arguments["question"]
 	if !ok {
-		return "", fmt.Errorf("invalid question argument")
+		return "", fmt.Errorf("invalid question argument: question is required")
 	}
 
-	a.logger.Ask(question)
+	questionStr, ok := question.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid question argument: must be a string")
+	}
 
-	fmt.Printf("\n💬 %s\n", question)
+	if questionStr == "" {
+		return "", fmt.Errorf("invalid question argument: question cannot be empty")
+	}
+
+	a.logger.Ask(questionStr)
+
+	fmt.Printf("\n💬 %s\n", questionStr)
 	fmt.Print("Ваш ответ: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -150,16 +191,25 @@ func (a *Agent) executeAskUser(ctx context.Context, arguments map[string]interfa
 	return fmt.Sprintf("User answered: %s", answer), nil
 }
 
-func (a *Agent) executeConfirmAction(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	description, ok := arguments["description"].(string)
+func (a *Agent) ExecuteConfirmAction(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	description, ok := arguments["description"]
 	if !ok {
-		return "", fmt.Errorf("invalid description argument")
+		return "", fmt.Errorf("invalid description argument: description is required")
 	}
 
-	a.logger.Confirm(description)
+	descriptionStr, ok := description.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid description argument: must be a string")
+	}
+
+	if descriptionStr == "" {
+		return "", fmt.Errorf("invalid description argument: description cannot be empty")
+	}
+
+	a.logger.Confirm(descriptionStr)
 
 	fmt.Printf("\n🔒 [ПОДТВЕРЖДЕНИЕ ТРЕБУЕТСЯ]\n")
-	fmt.Printf("Действие: %s\n", description)
+	fmt.Printf("Действие: %s\n", descriptionStr)
 	fmt.Print("Продолжить? (yes/no): ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -173,18 +223,28 @@ func (a *Agent) executeConfirmAction(ctx context.Context, arguments map[string]i
 	return "User DENIED the action. Do NOT proceed.", types.ErrConfirmationDenied
 }
 
-func (a *Agent) executeReport(ctx context.Context, arguments map[string]interface{}) (string, error) {
-	message, ok := arguments["message"].(string)
+func (a *Agent) ExecuteReport(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	message, ok := arguments["message"]
 	if !ok {
 		message = "Task completed"
 	}
 
-	success, ok := arguments["success"].(bool)
+	messageStr, ok := message.(string)
+	if !ok {
+		messageStr = "Task completed"
+	}
+
+	success, ok := arguments["success"]
 	if !ok {
 		success = true
 	}
 
-	a.logger.Done(message, success)
+	successBool, ok := success.(bool)
+	if !ok {
+		successBool = true
+	}
 
-	return message, nil
+	a.logger.Done(messageStr, successBool)
+
+	return messageStr, nil
 }
