@@ -118,19 +118,9 @@ func (l *Logger) Type(id int, text string) {
 	l.sugared.Info("Type into element", "id", id, "text", text)
 }
 
-func (l *Logger) Scroll(direction string) {
-	infoColor.Printf("📜 [SCROLL] %s\n", direction)
-	l.sugared.Info("Scroll page", "direction", direction)
-}
-
 func (l *Logger) Confirm(desc string) {
 	errorMsgColor.Printf("🔒 [CONFIRM] %s\n", truncate(desc, 100))
 	l.sugared.Warn("Confirmation required", "description", desc)
-}
-
-func (l *Logger) Ask(question string) {
-	infoColor.Printf("💬 [ASK] %s\n", truncate(question, 100))
-	l.sugared.Info("User question", "question", question)
 }
 
 func (l *Logger) Done(msg string, success bool) {
@@ -143,19 +133,9 @@ func (l *Logger) Done(msg string, success bool) {
 	}
 }
 
-func (l *Logger) Step(current, max int) {
-	stepColor.Printf("📍 [STEP %d/%d]\n", current, max)
-	l.sugared.Info("Step progress", "current", current, "max", max)
-}
-
 func (l *Logger) Thinking() {
 	thinkColor.Print("🤔 [THINKING]...\n")
 	l.sugared.Debug("AI is thinking")
-}
-
-func (l *Logger) Tool(name string) {
-	toolColor.Printf("🔧 [TOOL] %s\n", truncate(name, 50))
-	l.sugared.Info("Executing tool", "tool", name)
 }
 
 func truncate(s string, max int) string {
@@ -181,4 +161,24 @@ func isTerminal() bool {
 
 func disableColors() {
 	color.NoColor = true
+}
+
+func (l *Logger) Tool(name string) {
+	toolColor.Printf("🔧 [TOOL] %s\n", name)
+	l.sugared.Infow("Executing tool", "tool", name)
+}
+
+func (l *Logger) Step(current, max int) {
+	stepColor.Printf("📍 [STEP %d/%d]\n", current, max)
+	l.sugared.Infow("Step progress", "current", current, "max", max)
+}
+
+func (l *Logger) Scroll(direction string) {
+	infoColor.Printf("📜 [SCROLL] %s\n", direction)
+	l.sugared.Infow("Scroll page", "direction", direction)
+}
+
+func (l *Logger) Ask(question string) {
+	infoColor.Printf("💬 [ASK] %s\n", truncate(question, 100))
+	l.sugared.Infow("User question", "question", question)
 }

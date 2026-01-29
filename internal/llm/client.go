@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/stannisl/ai-browser-assistant/internal/logger"
@@ -11,9 +12,10 @@ import (
 )
 
 type Client struct {
-	client *openai.Client
-	model  string
-	logger *logger.Logger
+	client     *openai.Client
+	model      string
+	logger     *logger.Logger
+	maxRetries int
 }
 
 func NewClient(config *types.LLMConfig, log *logger.Logger) (*Client, error) {
@@ -22,10 +24,16 @@ func NewClient(config *types.LLMConfig, log *logger.Logger) (*Client, error) {
 
 	client := openai.NewClientWithConfig(cfg)
 
+	maxRetries := config.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
 	return &Client{
-		client: client,
-		model:  config.Model,
-		logger: log,
+		client:     client,
+		model:      config.Model,
+		logger:     log,
+		maxRetries: maxRetries,
 	}, nil
 }
 
@@ -38,12 +46,43 @@ func (c *Client) Chat(ctx context.Context, messages []openai.ChatCompletionMessa
 		Tools:    GetTools(),
 	}
 
-	resp, err := c.client.CreateChatCompletion(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("chat completion failed: %w", err)
+	var resp openai.ChatCompletionResponse
+	var lastErr error
+
+	for attempt := 1; attempt <= c.maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		var err error
+		resp, err = c.client.CreateChatCompletion(ctx, req)
+		
+		if err == nil {
+			return &resp, nil
+		}
+
+		lastErr = err
+		c.logger.Warn("LLM request failed, retrying...", 
+			"attempt", attempt, 
+			"max_retries", c.maxRetries, 
+			"error", err.Error())
+
+		// Экспоненциальная задержка перед retry
+		if attempt < c.maxRetries {
+			delay := time.Duration(attempt) * 2 * time.Second
+			c.logger.Debug("Waiting before retry", "delay", delay)
+			
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
 	}
 
-	return &resp, nil
+	return nil, fmt.Errorf("chat completion failed after %d retries: %w", c.maxRetries, lastErr)
 }
 
 func (c *Client) ExtractToolCall(response *openai.ChatCompletionResponse) (*types.ToolCall, bool) {
@@ -57,22 +96,17 @@ func (c *Client) ExtractToolCall(response *openai.ChatCompletionResponse) (*type
 		return nil, false
 	}
 
-	var toolCalls []types.ToolCall
-	for _, tc := range choice.Message.ToolCalls {
-		var args map[string]interface{}
-		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-			args = map[string]interface{}{}
-		}
+	tc := choice.Message.ToolCalls[0]
 
-		toolCalls = append(toolCalls, types.ToolCall{
-			ID:        tc.ID,
-			ToolName:  tc.Function.Name,
-			Arguments: args,
-		})
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+		args = map[string]interface{}{}
 	}
 
 	return &types.ToolCall{
-		ToolCalls: toolCalls,
+		ID:        tc.ID,
+		ToolName:  tc.Function.Name,
+		Arguments: args,
 	}, true
 }
 

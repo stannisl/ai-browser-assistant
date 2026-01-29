@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -13,25 +12,9 @@ import (
 	"github.com/stannisl/ai-browser-assistant/internal/types"
 )
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 type Extractor struct {
-	page      *rod.Page
-	selectors sync.Map
-	counter   int
-	logger    *logger.Logger
+	page   *rod.Page
+	logger *logger.Logger
 }
 
 func New(page *rod.Page, log *logger.Logger) *Extractor {
@@ -42,268 +25,338 @@ func New(page *rod.Page, log *logger.Logger) *Extractor {
 }
 
 func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
-	e.counter = 0
-	e.selectors = sync.Map{}
-
-	var url string
-	if info, err := e.page.Info(); err == nil && info != nil {
-		url = info.URL
-	} else {
-		url = e.page.MustElement("html").MustProperty("location.href").String()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
-	title := e.page.MustElement("html").MustProperty("title").String()
 
+	// Получаем информацию о странице
+	info, err := e.page.Info()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page info: %w", err)
+	}
+
+	// JavaScript для извлечения элементов
 	jsCode := `() => {
-    const results = [];
-    const selectors = [
-        'button', 'a[href]', 'input', 'select', 'textarea',
-        '[role="button"]', '[onclick]', '[role="link"]',
-        '[role="menuitem"]', '[role="tab"]', '[type="submit"]'
-    ];
-    
-    const seen = new Set();
-    
-    selectors.forEach(sel => {
-        document.querySelectorAll(sel).forEach(el => {
-            if (seen.has(el)) return;
-            seen.add(el);
-            
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            
-            const isVisible = rect.width > 0 && 
-                             rect.height > 0 && 
-                             style.display !== 'none' &&
-                             style.visibility !== 'hidden' &&
-                             parseFloat(style.opacity) > 0;
-            
-            if (!isVisible) return;
-            
-            let selector = '';
-            if (el.id) {
-                selector = '#' + el.id;
-            } else {
-                const path = [];
-                let current = el;
-                while (current && current !== document.body) {
-                    let index = 1;
-                    let sibling = current.previousElementSibling;
-                    while (sibling) {
-                        if (sibling.tagName === current.tagName) index++;
-                        sibling = sibling.previousElementSibling;
-                    }
-                    path.unshift(current.tagName.toLowerCase() + ':nth-of-type(' + index + ')');
-                    current = current.parentElement;
-                }
-                selector = 'body > ' + path.join(' > ');
-            }
-            
-            results.push({
-                type: el.tagName.toLowerCase(),
-                text: (el.innerText || el.value || '').slice(0, 100).trim(),
-                placeholder: el.placeholder || '',
-                ariaLabel: el.getAttribute('aria-label') || '',
-                href: el.href || '',
-                inputType: el.type || '',
-                selector: selector
-            });
-        });
-    });
-    
-    const hasModal = !!(
-        document.querySelector('[role="dialog"]') ||
-        document.querySelector('[role="alertdialog"]') ||
-        document.querySelector('.modal.show') ||
-        document.querySelector('[class*="modal"][class*="open"]')
-    );
-    
-    return { elements: results, hasModal: hasModal };
-}`
+		// Очищаем и инициализируем глобальный массив элементов
+		window._ai_elements = [];
+		
+		const results = [];
+		
+		// Селекторы для поиска интерактивных элементов
+		const selectors = [
+			'a[href]',
+			'button',
+			'input:not([type="hidden"])',
+			'textarea',
+			'select',
+			'[role="button"]',
+			'[role="link"]',
+			'[role="menuitem"]',
+			'[role="tab"]',
+			'[role="checkbox"]',
+			'[role="radio"]',
+			'[onclick]',
+			'[tabindex]:not([tabindex="-1"])',
+			'label[for]',
+			'summary'
+		];
+		
+		const seen = new Set();
+		
+		selectors.forEach(sel => {
+			try {
+				document.querySelectorAll(sel).forEach(el => {
+					if (seen.has(el)) return;
+					seen.add(el);
+					
+					// Проверка видимости
+					const rect = el.getBoundingClientRect();
+					const style = window.getComputedStyle(el);
+					
+					const isVisible = 
+						rect.width > 0 && 
+						rect.height > 0 && 
+						style.display !== 'none' && 
+						style.visibility !== 'hidden' && 
+						parseFloat(style.opacity) > 0;
+					
+					if (!isVisible) return;
+					
+					// Сохраняем элемент в глобальный массив
+					const id = window._ai_elements.length;
+					window._ai_elements.push(el);
+					
+					// Получаем текст элемента
+					let text = '';
+					if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
+						text = el.value || el.placeholder || '';
+					} else {
+						text = el.innerText || el.textContent || el.getAttribute('aria-label') || '';
+					}
+					text = text.trim().substring(0, 100);
+					
+					// Получаем тип для input
+					let inputType = '';
+					if (el.tagName.toLowerCase() === 'input') {
+						inputType = el.type || 'text';
+					}
+					
+					results.push({
+						id: id,
+						tag: el.tagName.toLowerCase(),
+						text: text,
+						type: inputType,
+						href: el.href || '',
+						placeholder: el.placeholder || '',
+						ariaLabel: el.getAttribute('aria-label') || '',
+						name: el.name || '',
+						role: el.getAttribute('role') || ''
+					});
+				});
+			} catch (e) {
+				// Игнорируем ошибки для отдельных селекторов
+			}
+		});
+		
+		// Определяем наличие модального окна
+		let hasModal = false;
+		const modalSelectors = [
+			'[role="dialog"]',
+			'[role="alertdialog"]',
+			'[aria-modal="true"]',
+			'.modal:not([style*="display: none"])',
+			'.popup:not([style*="display: none"])',
+			'[class*="modal"]:not([style*="display: none"])'
+		];
+		
+		for (const sel of modalSelectors) {
+			try {
+				const modal = document.querySelector(sel);
+				if (modal) {
+					const style = window.getComputedStyle(modal);
+					if (style.display !== 'none' && style.visibility !== 'hidden') {
+						hasModal = true;
+						break;
+					}
+				}
+			} catch (e) {}
+		}
+		
+		return {
+			elements: results,
+			hasModal: hasModal,
+			totalElements: window._ai_elements.length
+		};
+	}`
 
-	res := e.page.MustEval(jsCode)
+	res, err := e.page.Eval(jsCode)
+	if err != nil {
+		return nil, fmt.Errorf("JS extraction failed: %w", err)
+	}
 
-	var result struct {
+	// Парсим результат
+	var jsResult struct {
 		Elements []struct {
-			Type        string `json:"type"`
+			ID          int    `json:"id"`
+			Tag         string `json:"tag"`
 			Text        string `json:"text"`
+			Type        string `json:"type"`
+			Href        string `json:"href"`
 			Placeholder string `json:"placeholder"`
 			AriaLabel   string `json:"ariaLabel"`
-			Href        string `json:"href"`
-			InputType   string `json:"inputType"`
-			Selector    string `json:"selector"`
+			Name        string `json:"name"`
+			Role        string `json:"role"`
 		} `json:"elements"`
-		HasModal bool `json:"hasModal"`
+		HasModal      bool `json:"hasModal"`
+		TotalElements int  `json:"totalElements"`
 	}
 
-	err := json.Unmarshal([]byte(res.JSON("", "")), &result)
-	if err != nil {
-		return nil, fmt.Errorf("JSON unmarshal failed: %w", err)
+	jsonStr := res.Value.JSON("", "")
+	if err := json.Unmarshal([]byte(jsonStr), &jsResult); err != nil {
+		return nil, fmt.Errorf("failed to parse JS result: %w", err)
 	}
 
+	// Формируем PageState
 	pageState := &types.PageState{
-		Title:        title,
-		URL:          url,
-		Elements:     []types.PageElement{},
-		ElementCount: 0,
-		InputCount:   0,
-		ButtonCount:  0,
-		LinkCount:    0,
+		Title:        info.Title,
+		URL:          info.URL,
+		HasModal:     jsResult.HasModal,
+		ElementCount: jsResult.TotalElements,
 		Timestamp:    time.Now(),
-		IsLoading:    false,
-		ScrollY:      0,
-		Viewport: struct {
-			Width  int
-			Height int
-		}{
-			Width:  1920,
-			Height: 1080,
-		},
-		HasModal: result.HasModal,
 	}
 
-	const maxElements = 50
-	var elements []types.PageElement
-	elementsRaw := result.Elements
-
-	for i, elem := range elementsRaw {
-		if i >= maxElements {
-			break
+	// Конвертируем элементы
+	for _, elem := range jsResult.Elements {
+		attrs := map[string]string{}
+		if elem.Href != "" {
+			attrs["href"] = elem.Href
 		}
-		selectorID := e.counter
-		e.selectors.Store(selectorID, elem.Selector)
+		if elem.Placeholder != "" {
+			attrs["placeholder"] = elem.Placeholder
+		}
+		if elem.AriaLabel != "" {
+			attrs["aria-label"] = elem.AriaLabel
+		}
+		if elem.Name != "" {
+			attrs["name"] = elem.Name
+		}
+		if elem.Type != "" {
+			attrs["type"] = elem.Type
+		}
+		if elem.Role != "" {
+			attrs["role"] = elem.Role
+		}
 
-		pageElement := types.PageElement{
-			ID:         i,
-			Selector:   elem.Selector,
+		pe := types.PageElement{
+			ID:         elem.ID,
+			Tag:        elem.Tag,
 			Text:       elem.Text,
-			Tag:        elem.Type,
-			Attributes: map[string]string{
-				"placeholder": elem.Placeholder,
-				"aria-label":  elem.AriaLabel,
-				"type":        elem.InputType,
-				"href":        elem.Href,
-			},
-			Clickable:     true,
-			Visible:       true,
-			DiscoveryTime: time.Now(),
+			Attributes: attrs,
+			Visible:    true,
 		}
-
-		if elem.Type == "a" && len(elem.Href) > 0 {
-			pageElement.Attributes["href"] = elem.Href
-		}
-
-		pageState.ElementCount++
-		if elem.Type == "input" || elem.Type == "textarea" || elem.Type == "select" {
-			pageState.InputCount++
-		}
-		if elem.Type == "button" || strings.Contains(elem.AriaLabel, "submit") {
-			pageState.ButtonCount++
-		}
-		if elem.Type == "a" {
-			pageState.LinkCount++
-		}
-
-		elements = append(elements, pageElement)
-		e.counter++
+		pageState.Elements = append(pageState.Elements, pe)
 	}
-
-	if len(elementsRaw) > maxElements {
-		pageState.Content = fmt.Sprintf("Showing %d of %d elements", len(elements), len(elementsRaw))
-	} else {
-		pageState.Content = fmt.Sprintf("Showing %d elements", pageState.ElementCount)
-	}
-
-	pageState.Elements = elements
-
-	pageState.Scripts = []string{}
-	pageState.Forms = []types.FormElement{}
-	pageState.Links = []types.LinkElement{}
 
 	if e.logger != nil {
-		e.logger.Extract(url, pageState.ElementCount)
+		e.logger.Debug("Extracted elements", "count", len(pageState.Elements), "hasModal", pageState.HasModal)
 	}
 
 	return pageState, nil
 }
 
-func (e *Extractor) GetSelector(id int) (string, error) {
-	value, ok := e.selectors.Load(id)
-	if !ok {
-		return "", types.ErrElementNotFound
-	}
-	return value.(string), nil
-}
-
 func (e *Extractor) FormatForLLM(state *types.PageState) string {
-	var builder strings.Builder
+	var b strings.Builder
 
-	builder.WriteString(fmt.Sprintf("Page: %s\n", state.Title))
-	builder.WriteString(fmt.Sprintf("URL: %s\n\n", state.URL))
+	b.WriteString(fmt.Sprintf("## Page: %s\n", state.Title))
+	b.WriteString(fmt.Sprintf("## URL: %s\n\n", state.URL))
 
 	if state.HasModal {
-		builder.WriteString("[!!! MODAL WINDOW ACTIVE !!!]\n\n")
+		b.WriteString("⚠️ **MODAL/POPUP DETECTED** - Focus on modal elements first. Close with Escape or find close button.\n\n")
 	}
 
+	// Группируем элементы по типу
 	var inputs, buttons, links, other []types.PageElement
 
 	for _, el := range state.Elements {
-		switch {
-		case el.Tag == "input" || el.Tag == "textarea" || el.Tag == "select":
-			state.InputCount++
+		switch el.Tag {
+		case "input", "textarea", "select":
 			inputs = append(inputs, el)
-		case el.Tag == "button" || strings.Contains(el.Attributes["aria-label"], "submit"):
-			state.ButtonCount++
+		case "button":
 			buttons = append(buttons, el)
-		case el.Tag == "a":
-			state.LinkCount++
-			links = append(links, el)
+		case "a":
+			if el.Text != "" || el.Attributes["aria-label"] != "" {
+				links = append(links, el)
+			}
 		default:
-			other = append(other, el)
+			if el.Text != "" {
+				other = append(other, el)
+			}
 		}
 	}
 
-	builder.WriteString("[Input Fields]\n")
-	for _, el := range inputs {
-		builder.WriteString(e.formatElement(el) + "\n")
-	}
-
-	builder.WriteString("\n[Buttons]\n")
-	for _, el := range buttons {
-		builder.WriteString(e.formatElement(el) + "\n")
-	}
-
-	builder.WriteString("\n[Links - first 20]\n")
-	for i, el := range links {
-		if i >= 20 {
-			break
+	// Inputs
+	if len(inputs) > 0 {
+		b.WriteString("### Input Fields\n")
+		for _, el := range inputs {
+			b.WriteString(e.formatElement(el) + "\n")
 		}
-		builder.WriteString(e.formatElement(el) + "\n")
+		b.WriteString("\n")
 	}
 
-	builder.WriteString(fmt.Sprintf("\n[Page Info]\nTotal: %d | Shown: %d\n", state.ElementCount, len(inputs)+len(buttons)+min(len(links), 20)))
+	// Buttons
+	if len(buttons) > 0 {
+		b.WriteString("### Buttons\n")
+		for _, el := range buttons {
+			b.WriteString(e.formatElement(el) + "\n")
+		}
+		b.WriteString("\n")
+	}
 
-	return builder.String()
+	// Links (ограничиваем количество)
+	if len(links) > 0 {
+		b.WriteString("### Links\n")
+		limit := 30
+		for i, el := range links {
+			if i >= limit {
+				b.WriteString(fmt.Sprintf("... and %d more links\n", len(links)-limit))
+				break
+			}
+			b.WriteString(e.formatElement(el) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// Other interactive elements
+	if len(other) > 0 {
+		b.WriteString("### Other Interactive Elements\n")
+		limit := 15
+		for i, el := range other {
+			if i >= limit {
+				break
+			}
+			b.WriteString(e.formatElement(el) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString(fmt.Sprintf("Total interactive elements: %d\n", state.ElementCount))
+
+	return b.String()
 }
 
 func (e *Extractor) formatElement(el types.PageElement) string {
-	line := fmt.Sprintf("[%d] %s", el.ID, el.Tag)
+	var parts []string
 
-	if len(el.Text) > 0 {
-		line += fmt.Sprintf(" \"%s\"", truncate(el.Text, 40))
-	}
-	if len(el.Attributes["placeholder"]) > 0 {
-		line += fmt.Sprintf(" placeholder=\"%s\"", truncate(el.Attributes["placeholder"], 25))
-	}
-	if el.Tag == "a" && strings.HasPrefix(el.Attributes["href"], "http") {
-		line += fmt.Sprintf(" → %s", truncate(el.Attributes["href"], 50))
+	// ID и тег
+	parts = append(parts, fmt.Sprintf("[%d] %s", el.ID, el.Tag))
+
+	// Текст
+	if el.Text != "" {
+		text := el.Text
+		if len(text) > 50 {
+			text = text[:50] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("%q", text))
 	}
 
-	return line
+	// Placeholder для input
+	if ph, ok := el.Attributes["placeholder"]; ok && ph != "" {
+		if len(ph) > 30 {
+			ph = ph[:30] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("placeholder=%q", ph))
+	}
+
+	// Тип для input
+	if t, ok := el.Attributes["type"]; ok && t != "" && t != "text" {
+		parts = append(parts, fmt.Sprintf("type=%s", t))
+	}
+
+	// Role если есть
+	if role, ok := el.Attributes["role"]; ok && role != "" {
+		parts = append(parts, fmt.Sprintf("role=%s", role))
+	}
+
+	return strings.Join(parts, " ")
 }
 
-func boolToString(b bool) string {
-	if b {
-		return "yes"
+// Вспомогательные функции
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
 	}
-	return "no"
+	return s[:maxLen] + "..."
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (e *Extractor) UpdatePage(page *rod.Page) {
+	e.page = page
 }

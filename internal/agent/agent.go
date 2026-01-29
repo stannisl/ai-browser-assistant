@@ -21,11 +21,11 @@ type Agent struct {
 	logger    *logger.Logger
 	config    *types.AgentConfig
 
-	messages        []openai.ChatCompletionMessage
-	step            int
-	lastToolName    string
-	sameToolCount   int
-	toolCallCounter int
+	messages      []openai.ChatCompletionMessage
+	step          int
+	lastToolName  string
+	lastToolArgs  string
+	sameToolCount int
 }
 
 func New(
@@ -56,86 +56,113 @@ func (a *Agent) Run(ctx context.Context, task string) error {
 			Content: task,
 		},
 	}
-	a.toolCallCounter = 0
 	a.lastToolName = ""
+	a.lastToolArgs = ""
+	a.sameToolCount = 0
 
 	for a.step < a.config.MaxSteps {
 		select {
 		case <-ctx.Done():
 			return types.ErrContextCanceled
 		default:
-			time.Sleep(200 * time.Millisecond)
 		}
 
 		a.step++
 		a.logger.Step(a.step, a.config.MaxSteps)
 
+		// Обрезаем историю если слишком длинная
 		a.trimHistory()
 
+		// Запрос к LLM
 		response, err := a.llm.Chat(ctx, a.messages)
 		if err != nil {
 			return fmt.Errorf("llm chat: %w", err)
 		}
 
+		// Извлекаем tool call
 		toolCall, hasToolCall := a.llm.ExtractToolCall(response)
 
 		if !hasToolCall {
+			// LLM ответил текстом без tool call
 			if len(response.Choices) > 0 {
 				msg := response.Choices[0].Message
 				a.messages = append(a.messages, msg)
+
+				// Просим продолжить
+				a.messages = append(a.messages, openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleUser,
+					Content: "Continue. Use extract_page to see the page, or report if done.",
+				})
 			}
 			continue
 		}
 
 		a.logger.Tool(toolCall.ToolName)
-		a.toolCallCounter++
 
-		if a.toolCallCounter > 10 {
-			a.logger.Warn("Possible infinite loop detected", "steps", a.toolCallCounter)
-			return types.ErrMaxStepsExceeded
-		}
-
-		msg := response.Choices[0].Message
-
-		if len(msg.ToolCalls) > 0 {
-			msg.ToolCalls = nil
-			a.messages = append(a.messages, msg)
-		} else {
-			a.messages = append(a.messages, msg)
-		}
-
-		var firstErr error
-		var lastResult string
-
-		for _, tc := range toolCall.ToolCalls {
-			result, err := a.ExecuteTool(ctx, &tc)
-			lastResult = result
-
-			toolResultContent := result
-			if err != nil && firstErr == nil {
-				firstErr = err
-				toolResultContent = fmt.Sprintf("Error: %v", err)
-			}
-
+		// Проверка на loop
+		if a.detectLoop(toolCall) {
 			a.messages = append(a.messages, openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
-				ToolCallID: tc.ID,
-				Content:    toolResultContent,
+				Role:    openai.ChatMessageRoleUser,
+				Content: "You seem stuck repeating the same action. Try extract_page to refresh, or try a different approach.",
 			})
-
-			if tc.ToolName == "report" {
-				a.logger.Done(result, err == nil)
-				return nil
-			}
 		}
 
-		if firstErr != nil {
-			a.logger.Done(lastResult, false)
-			return firstErr
+		// Добавляем assistant message с tool call
+		assistantMsg := openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleAssistant,
+			Content: response.Choices[0].Message.Content,
+			ToolCalls: []openai.ToolCall{
+				{
+					ID:   toolCall.ID,
+					Type: openai.ToolTypeFunction,
+					Function: openai.FunctionCall{
+						Name:      toolCall.ToolName,
+						Arguments: response.Choices[0].Message.ToolCalls[0].Function.Arguments,
+					},
+				},
+			},
 		}
+		a.messages = append(a.messages, assistantMsg)
+
+		// Выполняем tool
+		result, err := a.ExecuteTool(ctx, toolCall)
+
+		toolResultContent := result
+		if err != nil {
+			toolResultContent = fmt.Sprintf("Error: %v", err)
+		}
+
+		// Добавляем результат tool
+		a.messages = append(a.messages, openai.ChatCompletionMessage{
+			Role:       openai.ChatMessageRoleTool,
+			ToolCallID: toolCall.ID,
+			Content:    toolResultContent,
+		})
+
+		// Если report — завершаем
+		if toolCall.ToolName == "report" {
+			return nil
+		}
+
+		// Небольшая пауза между шагами
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	return types.ErrMaxStepsExceeded
+}
+
+func (a *Agent) detectLoop(tc *types.ToolCall) bool {
+	argsStr := fmt.Sprintf("%v", tc.Arguments)
+
+	if tc.ToolName == a.lastToolName && argsStr == a.lastToolArgs {
+		a.sameToolCount++
+	} else {
+		a.lastToolName = tc.ToolName
+		a.lastToolArgs = argsStr
+		a.sameToolCount = 1
+	}
+
+	return a.sameToolCount >= 3
 }
 
 func (a *Agent) trimHistory() {
@@ -145,131 +172,19 @@ func (a *Agent) trimHistory() {
 		return
 	}
 
+	// Сохраняем system + первый user (индексы 0, 1)
 	preserved := a.messages[:2]
-	recent := a.messages[len(a.messages)-(maxMessages-2):]
 
-	validRecent := a.validateMessagePairsForSlice(recent)
-	a.messages = append(preserved, validRecent...)
+	// Берём последние сообщения
+	tailSize := maxMessages - 2
+	tail := a.messages[len(a.messages)-tailSize:]
 
-	a.messages = a.validateMessagePairs()
-	a.logger.Debug("History trimmed", "from", len(a.messages)+len(recent), "to", len(a.messages))
-}
-
-func (a *Agent) validateMessagePairsForSlice(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	validMessages := make([]openai.ChatCompletionMessage, 0, len(messages))
-
-	for i := range messages {
-		msg := messages[i]
-
-		if msg.Role == openai.ChatMessageRoleTool && msg.ToolCallID != "" {
-			foundParent := false
-
-			for j := i - 1; j >= 0; j-- {
-				parent := messages[j]
-				if parent.Role == openai.ChatMessageRoleAssistant && len(parent.ToolCalls) > 0 {
-					for _, tc := range parent.ToolCalls {
-						if tc.ID == msg.ToolCallID {
-							foundParent = true
-							break
-						}
-					}
-					if foundParent {
-						break
-					}
-				}
-			}
-
-			if foundParent {
-				validMessages = append(validMessages, msg)
-			}
-		} else {
-			validMessages = append(validMessages, msg)
-		}
+	// Проверяем что tail не начинается с Tool message (нужен parent Assistant)
+	for len(tail) > 0 && tail[0].Role == openai.ChatMessageRoleTool {
+		// Пропускаем orphan Tool messages
+		tail = tail[1:]
 	}
 
-	return validMessages
-}
-
-func (a *Agent) validateMessagePairs() []openai.ChatCompletionMessage {
-	validMessages := make([]openai.ChatCompletionMessage, 0, len(a.messages))
-
-	for i := range a.messages {
-		msg := a.messages[i]
-
-		if msg.Role == openai.ChatMessageRoleTool && msg.ToolCallID != "" {
-			foundParent := false
-
-			for j := i - 1; j >= 0; j-- {
-				parent := a.messages[j]
-				if parent.Role == openai.ChatMessageRoleAssistant && len(parent.ToolCalls) > 0 {
-					for _, tc := range parent.ToolCalls {
-						if tc.ID == msg.ToolCallID {
-							foundParent = true
-							break
-						}
-					}
-					if foundParent {
-						break
-					}
-				}
-			}
-
-			if foundParent {
-				validMessages = append(validMessages, msg)
-			}
-		} else {
-			validMessages = append(validMessages, msg)
-		}
-	}
-
-	return validMessages
-}
-
-func (a *Agent) ExecuteTool(ctx context.Context, tc *types.ToolCall) (string, error) {
-	if len(tc.ToolCalls) > 0 {
-		var results []string
-		var firstErr error
-
-		for _, tcc := range tc.ToolCalls {
-			result, err := a.executeToolDirect(ctx, &tcc)
-			results = append(results, result)
-			if err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-
-		if firstErr != nil {
-			return results[0], firstErr
-		}
-		return results[0], nil
-	}
-
-	return a.executeToolDirect(ctx, tc)
-}
-
-func (a *Agent) executeToolDirect(ctx context.Context, tc *types.ToolCall) (string, error) {
-	switch tc.ToolName {
-	case "extract_page":
-		return a.ExecuteExtractPage(ctx, tc.Arguments)
-	case "navigate":
-		return a.ExecuteNavigate(ctx, tc.Arguments)
-	case "click":
-		return a.ExecuteClick(ctx, tc.Arguments)
-	case "type_text":
-		return a.ExecuteTypeText(ctx, tc.Arguments)
-	case "scroll":
-		return a.ExecuteScroll(ctx, tc.Arguments)
-	case "wait":
-		return a.ExecuteWait(ctx, tc.Arguments)
-	case "ask_user":
-		return a.ExecuteAskUser(ctx, tc.Arguments)
-	case "confirm_action":
-		return a.ExecuteConfirmAction(ctx, tc.Arguments)
-	case "report":
-		return a.ExecuteReport(ctx, tc.Arguments)
-	case "press_key":
-		return a.ExecutePressKey(ctx, tc.Arguments)
-	default:
-		return "", fmt.Errorf("unknown tool: %s", tc.ToolName)
-	}
+	a.messages = append(preserved, tail...)
+	a.logger.Debug("History trimmed", "new_len", len(a.messages))
 }
