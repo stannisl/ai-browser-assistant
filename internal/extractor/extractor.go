@@ -24,6 +24,10 @@ func New(page *rod.Page, log *logger.Logger) *Extractor {
 	}
 }
 
+func (e *Extractor) UpdatePage(page *rod.Page) {
+	e.page = page
+}
+
 func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 	select {
 	case <-ctx.Done():
@@ -31,20 +35,18 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 	default:
 	}
 
-	// Получаем информацию о странице
 	info, err := e.page.Info()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page info: %w", err)
 	}
 
-	// JavaScript для извлечения элементов
+	// JavaScript для извлечения элементов И контента
 	jsCode := `() => {
-		// Очищаем и инициализируем глобальный массив элементов
 		window._ai_elements = [];
 		
 		const results = [];
 		
-		// Селекторы для поиска интерактивных элементов
+		// === ИНТЕРАКТИВНЫЕ ЭЛЕМЕНТЫ ===
 		const selectors = [
 			'a[href]',
 			'button',
@@ -57,10 +59,14 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 			'[role="tab"]',
 			'[role="checkbox"]',
 			'[role="radio"]',
+			'[role="listitem"]',
+			'[role="row"]',
 			'[onclick]',
 			'[tabindex]:not([tabindex="-1"])',
 			'label[for]',
-			'summary'
+			'summary',
+			'tr',
+			'li'
 		];
 		
 		const seen = new Set();
@@ -71,7 +77,6 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 					if (seen.has(el)) return;
 					seen.add(el);
 					
-					// Проверка видимости
 					const rect = el.getBoundingClientRect();
 					const style = window.getComputedStyle(el);
 					
@@ -84,20 +89,17 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 					
 					if (!isVisible) return;
 					
-					// Сохраняем элемент в глобальный массив
 					const id = window._ai_elements.length;
 					window._ai_elements.push(el);
 					
-					// Получаем текст элемента
 					let text = '';
 					if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
 						text = el.value || el.placeholder || '';
 					} else {
 						text = el.innerText || el.textContent || el.getAttribute('aria-label') || '';
 					}
-					text = text.trim().substring(0, 100);
+					text = text.trim().replace(/\\s+/g, ' ').substring(0, 150);
 					
-					// Получаем тип для input
 					let inputType = '';
 					if (el.tagName.toLowerCase() === 'input') {
 						inputType = el.type || 'text';
@@ -115,20 +117,89 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 						role: el.getAttribute('role') || ''
 					});
 				});
-			} catch (e) {
-				// Игнорируем ошибки для отдельных селекторов
-			}
+			} catch (e) {}
 		});
 		
-		// Определяем наличие модального окна
+		// === ТЕКСТОВЫЙ КОНТЕНТ СТРАНИЦЫ ===
+		let pageContent = [];
+		
+		// Извлекаем текст из основных контейнеров
+		const contentSelectors = [
+			'main',
+			'article', 
+			'[role="main"]',
+			'.content',
+			'.mail-list',
+			'.inbox',
+			'.messages',
+			'.letter-list',
+			'table tbody',
+			'ul',
+			'ol'
+		];
+		
+		// Ищем списки писем (типичные паттерны почтовых сервисов)
+		const mailPatterns = [
+			// Mail.ru
+			'.letter-list .letter-list-item',
+			'.dataset__items .dataset__item',
+			'.llc',  // letter list container
+			// Gmail
+			'.zA',
+			'[role="row"]',
+			// Yandex
+			'.mail-MessageSnippet',
+			'.ns-view-messages'
+		];
+		
+		let mailItems = [];
+		for (const pattern of mailPatterns) {
+			try {
+				const items = document.querySelectorAll(pattern);
+				if (items.length > 0) {
+					items.forEach((item, idx) => {
+						if (idx < 15) { // Берём первые 15 писем
+							const text = item.innerText || item.textContent || '';
+							const cleanText = text.trim().replace(/\\s+/g, ' ').substring(0, 300);
+							if (cleanText.length > 10) {
+								mailItems.push({
+									index: idx + 1,
+									content: cleanText
+								});
+							}
+						}
+					});
+					if (mailItems.length > 0) break;
+				}
+			} catch(e) {}
+		}
+		
+		// Если не нашли по паттернам, берём общий контент
+		if (mailItems.length === 0) {
+			try {
+				// Пробуем найти любые повторяющиеся элементы (строки списка)
+				const rows = document.querySelectorAll('div[class*="item"], div[class*="row"], div[class*="message"], div[class*="letter"], li');
+				const uniqueTexts = new Set();
+				rows.forEach((row, idx) => {
+					if (idx < 20) {
+						const text = (row.innerText || '').trim().replace(/\\s+/g, ' ');
+						if (text.length > 20 && text.length < 500 && !uniqueTexts.has(text)) {
+							uniqueTexts.add(text);
+							pageContent.push(text.substring(0, 300));
+						}
+					}
+				});
+			} catch(e) {}
+		}
+		
+		// Определяем модальные окна
 		let hasModal = false;
 		const modalSelectors = [
 			'[role="dialog"]',
 			'[role="alertdialog"]',
 			'[aria-modal="true"]',
 			'.modal:not([style*="display: none"])',
-			'.popup:not([style*="display: none"])',
-			'[class*="modal"]:not([style*="display: none"])'
+			'.popup:not([style*="display: none"])'
 		];
 		
 		for (const sel of modalSelectors) {
@@ -147,7 +218,9 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		return {
 			elements: results,
 			hasModal: hasModal,
-			totalElements: window._ai_elements.length
+			totalElements: window._ai_elements.length,
+			mailItems: mailItems,
+			pageContent: pageContent.slice(0, 15)
 		};
 	}`
 
@@ -156,7 +229,6 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		return nil, fmt.Errorf("JS extraction failed: %w", err)
 	}
 
-	// Парсим результат
 	var jsResult struct {
 		Elements []struct {
 			ID          int    `json:"id"`
@@ -171,6 +243,11 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		} `json:"elements"`
 		HasModal      bool `json:"hasModal"`
 		TotalElements int  `json:"totalElements"`
+		MailItems     []struct {
+			Index   int    `json:"index"`
+			Content string `json:"content"`
+		} `json:"mailItems"`
+		PageContent []string `json:"pageContent"`
 	}
 
 	jsonStr := res.Value.JSON("", "")
@@ -178,7 +255,6 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		return nil, fmt.Errorf("failed to parse JS result: %w", err)
 	}
 
-	// Формируем PageState
 	pageState := &types.PageState{
 		Title:        info.Title,
 		URL:          info.URL,
@@ -219,8 +295,18 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		pageState.Elements = append(pageState.Elements, pe)
 	}
 
+	// Сохраняем контент
+	var contentParts []string
+	for _, item := range jsResult.MailItems {
+		contentParts = append(contentParts, fmt.Sprintf("%d. %s", item.Index, item.Content))
+	}
+	if len(contentParts) == 0 {
+		contentParts = jsResult.PageContent
+	}
+	pageState.Content = strings.Join(contentParts, "\n")
+
 	if e.logger != nil {
-		e.logger.Debug("Extracted elements", "count", len(pageState.Elements), "hasModal", pageState.HasModal)
+		e.logger.Debug("Extracted elements", "count", len(pageState.Elements), "hasModal", pageState.HasModal, "contentItems", len(contentParts))
 	}
 
 	return pageState, nil
@@ -233,11 +319,19 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 	b.WriteString(fmt.Sprintf("## URL: %s\n\n", state.URL))
 
 	if state.HasModal {
-		b.WriteString("⚠️ **MODAL/POPUP DETECTED** - Focus on modal elements first. Close with Escape or find close button.\n\n")
+		b.WriteString("⚠️ **MODAL/POPUP DETECTED** - Close it first with Escape or find close button.\n\n")
 	}
 
-	// Группируем элементы по типу
-	var inputs, buttons, links, other []types.PageElement
+	// === КОНТЕНТ СТРАНИЦЫ (важно для почты!) ===
+	if state.Content != "" {
+		b.WriteString("### Page Content (emails, messages, items):\n")
+		b.WriteString("```\n")
+		b.WriteString(state.Content)
+		b.WriteString("\n```\n\n")
+	}
+
+	// Группируем элементы
+	var inputs, buttons, links, listItems []types.PageElement
 
 	for _, el := range state.Elements {
 		switch el.Tag {
@@ -249,9 +343,11 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 			if el.Text != "" || el.Attributes["aria-label"] != "" {
 				links = append(links, el)
 			}
-		default:
-			if el.Text != "" {
-				other = append(other, el)
+		case "tr", "li", "div":
+			if el.Attributes["role"] == "row" || el.Attributes["role"] == "listitem" {
+				if el.Text != "" && len(el.Text) > 10 {
+					listItems = append(listItems, el)
+				}
 			}
 		}
 	}
@@ -268,19 +364,10 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 	// Buttons
 	if len(buttons) > 0 {
 		b.WriteString("### Buttons\n")
-		for _, el := range buttons {
-			b.WriteString(e.formatElement(el) + "\n")
-		}
-		b.WriteString("\n")
-	}
-
-	// Links (ограничиваем количество)
-	if len(links) > 0 {
-		b.WriteString("### Links\n")
-		limit := 30
-		for i, el := range links {
+		limit := 15
+		for i, el := range buttons {
 			if i >= limit {
-				b.WriteString(fmt.Sprintf("... and %d more links\n", len(links)-limit))
+				b.WriteString(fmt.Sprintf("... and %d more buttons\n", len(buttons)-limit))
 				break
 			}
 			b.WriteString(e.formatElement(el) + "\n")
@@ -288,12 +375,26 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 		b.WriteString("\n")
 	}
 
-	// Other interactive elements
-	if len(other) > 0 {
-		b.WriteString("### Other Interactive Elements\n")
+	// List items (для почты важно!)
+	if len(listItems) > 0 {
+		b.WriteString("### List Items (emails/messages)\n")
 		limit := 15
-		for i, el := range other {
+		for i, el := range listItems {
 			if i >= limit {
+				break
+			}
+			b.WriteString(e.formatElement(el) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// Links
+	if len(links) > 0 {
+		b.WriteString("### Links\n")
+		limit := 20
+		for i, el := range links {
+			if i >= limit {
+				b.WriteString(fmt.Sprintf("... and %d more links\n", len(links)-limit))
 				break
 			}
 			b.WriteString(e.formatElement(el) + "\n")
@@ -309,19 +410,16 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 func (e *Extractor) formatElement(el types.PageElement) string {
 	var parts []string
 
-	// ID и тег
 	parts = append(parts, fmt.Sprintf("[%d] %s", el.ID, el.Tag))
 
-	// Текст
 	if el.Text != "" {
 		text := el.Text
-		if len(text) > 50 {
-			text = text[:50] + "..."
+		if len(text) > 80 {
+			text = text[:80] + "..."
 		}
 		parts = append(parts, fmt.Sprintf("%q", text))
 	}
 
-	// Placeholder для input
 	if ph, ok := el.Attributes["placeholder"]; ok && ph != "" {
 		if len(ph) > 30 {
 			ph = ph[:30] + "..."
@@ -329,34 +427,13 @@ func (e *Extractor) formatElement(el types.PageElement) string {
 		parts = append(parts, fmt.Sprintf("placeholder=%q", ph))
 	}
 
-	// Тип для input
 	if t, ok := el.Attributes["type"]; ok && t != "" && t != "text" {
 		parts = append(parts, fmt.Sprintf("type=%s", t))
 	}
 
-	// Role если есть
 	if role, ok := el.Attributes["role"]; ok && role != "" {
 		parts = append(parts, fmt.Sprintf("role=%s", role))
 	}
 
 	return strings.Join(parts, " ")
-}
-
-// Вспомогательные функции
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func (e *Extractor) UpdatePage(page *rod.Page) {
-	e.page = page
 }

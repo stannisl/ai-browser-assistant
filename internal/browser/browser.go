@@ -41,10 +41,12 @@ func NewManager(config *types.BrowserConfig, log *logger.Logger) *Manager {
 }
 
 func (m *Manager) Launch(ctx context.Context) error {
-	l := launcher.New().
+	l, err := launcher.New().
 		Headless(m.config.Headless).
-		UserDataDir(m.config.UserDataDir).
-		MustLaunch()
+		UserDataDir(m.config.UserDataDir).Launch()
+	if err != nil {
+		return fmt.Errorf("creating launcher failed: %w", err)
+	}
 
 	if m.config.Debug {
 		m.log.Debug("Browser launched", "headless", m.config.Headless, "userDataDir", m.config.UserDataDir)

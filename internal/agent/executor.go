@@ -119,22 +119,18 @@ func (a *Agent) executeScroll(ctx context.Context, args map[string]interface{}) 
 }
 
 func (a *Agent) executeWait(ctx context.Context, args map[string]interface{}) (string, error) {
-	seconds := 2.0 // default
+	seconds := 2.0
 	if s, ok := args["seconds"].(float64); ok {
 		seconds = s
 	}
+	seconds = max(1, min(10, seconds))
 
-	// Ограничиваем
-	if seconds < 1 {
-		seconds = 1
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(time.Duration(seconds) * time.Second):
+		return fmt.Sprintf("Waited %.0f seconds.", seconds), nil
 	}
-	if seconds > 10 {
-		seconds = 10
-	}
-
-	time.Sleep(time.Duration(seconds) * time.Second)
-
-	return fmt.Sprintf("Waited %.0f seconds.", seconds), nil
 }
 
 func (a *Agent) executePressKey(ctx context.Context, args map[string]interface{}) (string, error) {
