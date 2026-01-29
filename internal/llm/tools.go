@@ -164,6 +164,23 @@ func GetTools() []openai.Tool {
 				},
 			},
 		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        "press_key",
+				Description: "Press a keyboard key. Use for: Enter (submit forms), Escape (close modals), Tab (next field)",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"key": map[string]interface{}{
+							"type":        "string",
+							"description": "Key to press: Enter, Escape, Tab, ArrowDown, ArrowUp",
+						},
+					},
+					"required": []string{"key"},
+				},
+			},
+		},
 	}
 }
 
@@ -199,4 +216,8 @@ type ConfirmActionInput struct {
 type ReportInput struct {
 	Message string `json:"message"`
 	Success bool   `json:"success"`
+}
+
+type PressKeyInput struct {
+	Key string `json:"key"`
 }

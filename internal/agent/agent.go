@@ -15,16 +15,16 @@ import (
 )
 
 type Agent struct {
-	browser      *browser.Manager
-	extractor    *extractor.Extractor
-	llm          *llm.Client
-	logger       *logger.Logger
-	config       *types.AgentConfig
+	browser   *browser.Manager
+	extractor *extractor.Extractor
+	llm       *llm.Client
+	logger    *logger.Logger
+	config    *types.AgentConfig
 
-	messages       []openai.ChatCompletionMessage
-	step           int
-	lastToolName   string
-	sameToolCount  int
+	messages        []openai.ChatCompletionMessage
+	step            int
+	lastToolName    string
+	sameToolCount   int
 	toolCallCounter int
 }
 
@@ -147,34 +147,107 @@ func (a *Agent) trimHistory() {
 
 	preserved := a.messages[:2]
 	recent := a.messages[len(a.messages)-(maxMessages-2):]
-	a.messages = append(preserved, recent...)
 
+	validRecent := a.validateMessagePairsForSlice(recent)
+	a.messages = append(preserved, validRecent...)
+
+	a.messages = a.validateMessagePairs()
 	a.logger.Debug("History trimmed", "from", len(a.messages)+len(recent), "to", len(a.messages))
+}
+
+func (a *Agent) validateMessagePairsForSlice(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	validMessages := make([]openai.ChatCompletionMessage, 0, len(messages))
+
+	for i := range messages {
+		msg := messages[i]
+
+		if msg.Role == openai.ChatMessageRoleTool && msg.ToolCallID != "" {
+			foundParent := false
+
+			for j := i - 1; j >= 0; j-- {
+				parent := messages[j]
+				if parent.Role == openai.ChatMessageRoleAssistant && len(parent.ToolCalls) > 0 {
+					for _, tc := range parent.ToolCalls {
+						if tc.ID == msg.ToolCallID {
+							foundParent = true
+							break
+						}
+					}
+					if foundParent {
+						break
+					}
+				}
+			}
+
+			if foundParent {
+				validMessages = append(validMessages, msg)
+			}
+		} else {
+			validMessages = append(validMessages, msg)
+		}
+	}
+
+	return validMessages
+}
+
+func (a *Agent) validateMessagePairs() []openai.ChatCompletionMessage {
+	validMessages := make([]openai.ChatCompletionMessage, 0, len(a.messages))
+
+	for i := range a.messages {
+		msg := a.messages[i]
+
+		if msg.Role == openai.ChatMessageRoleTool && msg.ToolCallID != "" {
+			foundParent := false
+
+			for j := i - 1; j >= 0; j-- {
+				parent := a.messages[j]
+				if parent.Role == openai.ChatMessageRoleAssistant && len(parent.ToolCalls) > 0 {
+					for _, tc := range parent.ToolCalls {
+						if tc.ID == msg.ToolCallID {
+							foundParent = true
+							break
+						}
+					}
+					if foundParent {
+						break
+					}
+				}
+			}
+
+			if foundParent {
+				validMessages = append(validMessages, msg)
+			}
+		} else {
+			validMessages = append(validMessages, msg)
+		}
+	}
+
+	return validMessages
 }
 
 func (a *Agent) ExecuteTool(ctx context.Context, tc *types.ToolCall) (string, error) {
 	if len(tc.ToolCalls) > 0 {
 		var results []string
 		var firstErr error
-		
+
 		for _, tcc := range tc.ToolCalls {
-			result, err := a.executeToolInternal(ctx, &tcc)
+			result, err := a.executeToolDirect(ctx, &tcc)
 			results = append(results, result)
 			if err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
-		
+
 		if firstErr != nil {
 			return results[0], firstErr
 		}
 		return results[0], nil
 	}
-	
-	return a.executeToolInternal(ctx, tc)
+
+	return a.executeToolDirect(ctx, tc)
 }
 
-func (a *Agent) executeToolInternal(ctx context.Context, tc *types.ToolCall) (string, error) {
+func (a *Agent) executeToolDirect(ctx context.Context, tc *types.ToolCall) (string, error) {
 	switch tc.ToolName {
 	case "extract_page":
 		return a.ExecuteExtractPage(ctx, tc.Arguments)
@@ -194,6 +267,8 @@ func (a *Agent) executeToolInternal(ctx context.Context, tc *types.ToolCall) (st
 		return a.ExecuteConfirmAction(ctx, tc.Arguments)
 	case "report":
 		return a.ExecuteReport(ctx, tc.Arguments)
+	case "press_key":
+		return a.ExecutePressKey(ctx, tc.Arguments)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", tc.ToolName)
 	}

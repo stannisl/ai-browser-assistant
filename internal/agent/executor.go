@@ -52,26 +52,21 @@ func (a *Agent) ExecuteClick(ctx context.Context, arguments map[string]interface
 
 	a.logger.Debug("Click requested", "element_id", int(id))
 
-	selector, err := a.extractor.GetSelector(int(id))
-	if err != nil {
-		a.logger.Error("Element not found", err, "element_id", int(id))
-		return fmt.Sprintf("Error: element [%d] not found. Call extract_page to refresh elements.", int(id)), nil
-	}
-
-	a.logger.Click(int(id), selector)
-
-	if err := a.browser.Click(ctx, selector); err != nil {
-		a.logger.Error("Click failed", err, "selector", selector)
+	if err := a.browser.ClickByID(ctx, int(id)); err != nil {
+		a.logger.Error("Click failed", err, "element_id", int(id))
 		return fmt.Sprintf("Error: click on [%d] failed: %v. Try another element.", int(id), err), nil
 	}
 
-	return fmt.Sprintf("Clicked element [%d]. Call extract_page to see the result.", int(id)), nil
+	return fmt.Sprintf("Clicked element [%d]. Call extract_page to see the new page state.", int(id)), nil
 }
 
 func (a *Agent) ExecuteTypeText(ctx context.Context, arguments map[string]interface{}) (string, error) {
 	elementID, ok := arguments["element_id"]
 	if !ok {
-		return "", fmt.Errorf("invalid element_id argument: element_id is required")
+		elementID = arguments["id"]
+	}
+	if !ok {
+		return "", fmt.Errorf("invalid id argument: id is required")
 	}
 
 	text, ok := arguments["text"]
@@ -81,7 +76,7 @@ func (a *Agent) ExecuteTypeText(ctx context.Context, arguments map[string]interf
 
 	id, ok := elementID.(float64)
 	if !ok {
-		return "", fmt.Errorf("invalid element_id argument: must be a number")
+		return "", fmt.Errorf("invalid id argument: must be a number")
 	}
 
 	textStr, ok := text.(string)
@@ -89,26 +84,31 @@ func (a *Agent) ExecuteTypeText(ctx context.Context, arguments map[string]interf
 		return "", fmt.Errorf("invalid text argument: must be a string")
 	}
 
+	if id < 0 {
+		return "", fmt.Errorf("invalid id argument: must be non-negative")
+	}
+
 	if textStr == "" {
 		return "Error: text is empty. Provide text to type.", nil
 	}
 
-	a.logger.Debug("Type text requested", "element_id", int(id), "text", textStr)
+	a.logger.Debug("Type text requested", "id", int(id), "text", textStr)
 
 	selector, err := a.extractor.GetSelector(int(id))
 	if err != nil {
-		a.logger.Error("Element not found for typing", err, "element_id", int(id))
+		a.logger.Error("Element not found for typing", err, "id", int(id))
 		return fmt.Sprintf("Error: element [%d] not found. Call extract_page first.", int(id)), nil
 	}
 
+	_ = selector
 	a.logger.Type(int(id), textStr)
 
-	if err := a.browser.Type(ctx, selector, textStr); err != nil {
-		a.logger.Error("Type failed", err, "selector", selector)
-		return fmt.Sprintf("Error: typing into [%d] failed: %v", int(id), err), nil
+	if err := a.browser.TypeByID(ctx, int(id), textStr); err != nil {
+		a.logger.Error("Type failed", err, "id", int(id))
+		return fmt.Sprintf("Error: typing into element [%d] failed: %v", int(id), err), nil
 	}
 
-	return fmt.Sprintf("Typed '%s' into element [%d]. Now click search button or press Enter.", textStr, int(id)), nil
+	return fmt.Sprintf("Typed '%s' into element [%d]. Call extract_page to see result.", textStr, int(id)), nil
 }
 
 func (a *Agent) ExecuteScroll(ctx context.Context, arguments map[string]interface{}) (string, error) {
@@ -247,4 +247,29 @@ func (a *Agent) ExecuteReport(ctx context.Context, arguments map[string]interfac
 	a.logger.Done(messageStr, successBool)
 
 	return messageStr, nil
+}
+
+func (a *Agent) ExecutePressKey(ctx context.Context, arguments map[string]interface{}) (string, error) {
+	key, ok := arguments["key"]
+	if !ok {
+		return "", fmt.Errorf("invalid key argument: key is required")
+	}
+
+	keyStr, ok := key.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid key argument: must be a string")
+	}
+
+	if keyStr == "" {
+		return "", fmt.Errorf("invalid key argument: key cannot be empty")
+	}
+
+	a.logger.Debug("Press key requested", "key", keyStr)
+
+	if err := a.browser.PressKey(ctx, keyStr); err != nil {
+		a.logger.Error("Press key failed", err, "key", keyStr)
+		return fmt.Sprintf("Error: pressing key '%s' failed: %v", keyStr, err), nil
+	}
+
+	return fmt.Sprintf("Pressed key '%s'. Call extract_page to see result.", keyStr), nil
 }
