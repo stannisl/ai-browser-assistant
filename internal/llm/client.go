@@ -55,25 +55,27 @@ func (c *Client) Chat(ctx context.Context, messages []openai.ChatCompletionMessa
 			return nil, ctx.Err()
 		default:
 		}
-
+		c.logger.Debug("request", "req", req.Messages)
 		var err error
 		resp, err = c.client.CreateChatCompletion(ctx, req)
-		
+
+		c.logger.Debug("choices by ai", "choices", resp.Choices)
+
 		if err == nil {
 			return &resp, nil
 		}
 
 		lastErr = err
-		c.logger.Warn("LLM request failed, retrying...", 
-			"attempt", attempt, 
-			"max_retries", c.maxRetries, 
+		c.logger.Warn("LLM request failed, retrying...",
+			"attempt", attempt,
+			"max_retries", c.maxRetries,
 			"error", err.Error())
 
 		// Экспоненциальная задержка перед retry
 		if attempt < c.maxRetries {
 			delay := time.Duration(attempt) * 2 * time.Second
 			c.logger.Debug("Waiting before retry", "delay", delay)
-			
+
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()

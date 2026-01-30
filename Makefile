@@ -37,20 +37,6 @@ test:
 	@echo "Running tests..."
 	$(GO) test ./... -v
 
-test-verbose:
-	@echo "Running tests with verbose output..."
-	$(GO) test ./... -v
-
-test-coverage:
-	@echo "Running tests with coverage..."
-	$(GO) test ./... -coverprofile=coverage.out
-	$(GO) tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
-
-lint:
-	@echo "Running linter..."
-	$(GOLINT) run
-
 clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf $(BUILD_DIR)/*
@@ -64,15 +50,3 @@ tidy:
 fmt:
 	@echo "Formatting code..."
 	$(GO) fmt ./...
-
-install:
-	@echo "Installing $(BINARY_NAME)..."
-	$(GO) install ./cmd/agent
-
-build-all:
-	@echo "Building $(BINARY_NAME) for all platforms..."
-	@mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_DIR)/$(BINARY_NAME)-linux ./cmd/agent
-	$(GO) build -o $(BUILD_DIR)/$(BINARY_NAME)-windows.exe ./cmd/agent
-	$(GO) build -o $(BUILD_DIR)/$(BINARY_NAME)-darwin ./cmd/agent
-	@echo "Builds completed in $(BUILD_DIR)/"

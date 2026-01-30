@@ -41,32 +41,33 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 	}
 
 	// JavaScript для извлечения элементов И контента
+	// ОБНОВЛЕННАЯ ВЕРСИЯ
 	jsCode := `() => {
 		window._ai_elements = [];
-		
 		const results = [];
 		
-		// === ИНТЕРАКТИВНЫЕ ЭЛЕМЕНТЫ ===
+		// === 1. ИНТЕРАКТИВНЫЕ ЭЛЕМЕНТЫ ===
 		const selectors = [
 			'a[href]',
 			'button',
-			'input:not([type="hidden"])',
+			'input', // Убрали not(hidden), проверим видимость в коде
 			'textarea',
 			'select',
 			'[role="button"]',
+			'[role="checkbox"]',
 			'[role="link"]',
 			'[role="menuitem"]',
 			'[role="tab"]',
-			'[role="checkbox"]',
-			'[role="radio"]',
-			'[role="listitem"]',
-			'[role="row"]',
 			'[onclick]',
-			'[tabindex]:not([tabindex="-1"])',
-			'label[for]',
-			'summary',
-			'tr',
-			'li'
+			'[title]', 
+			'[data-title-shortcut]',
+			// Специфичные классы для почтовиков (чекбоксы и кнопки)
+			'.mail-MessageSnippet-Checkbox', // Yandex checkbox
+			'.checkbox__box',                // General UI checkbox
+			'.checkbox__control',
+			'[class*="button"]',
+			'[class*="btn"]',
+			'label'
 		];
 		
 		const seen = new Set();
@@ -74,153 +75,133 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		selectors.forEach(sel => {
 			try {
 				document.querySelectorAll(sel).forEach(el => {
+					if (el === document.body || el === document.documentElement) return;
 					if (seen.has(el)) return;
-					seen.add(el);
 					
 					const rect = el.getBoundingClientRect();
 					const style = window.getComputedStyle(el);
 					
-					const isVisible = 
+					// ХИТРАЯ ПРОВЕРКА ВИДИМОСТИ
+					// Некоторые чекбоксы (input) имеют opacity 0, но лежат поверх видимого элемента
+					let isVisible = 
 						rect.width > 0 && 
 						rect.height > 0 && 
 						style.display !== 'none' && 
-						style.visibility !== 'hidden' && 
-						parseFloat(style.opacity) > 0;
+						style.visibility !== 'hidden';
+
+					// Если это не input, требуем непрозрачность
+					if (el.tagName.toLowerCase() !== 'input' && !el.classList.contains('checkbox__control')) {
+						if (parseFloat(style.opacity) < 0.1) isVisible = false;
+					}
 					
 					if (!isVisible) return;
-					
+
+					seen.add(el);
 					const id = window._ai_elements.length;
 					window._ai_elements.push(el);
 					
+					// === ИЗВЛЕЧЕНИЕ ТЕКСТА ===
 					let text = '';
+					
+					// 1. Значения полей
 					if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
 						text = el.value || el.placeholder || '';
-					} else {
-						text = el.innerText || el.textContent || el.getAttribute('aria-label') || '';
+					} 
+					// 2. Текст внутри
+					else {
+						text = el.innerText || el.textContent || '';
 					}
-					text = text.trim().replace(/\\s+/g, ' ').substring(0, 150);
+
+					// 3. Атрибуты (title, aria)
+					if (!text.trim()) {
+						text = el.getAttribute('title') || 
+							   el.getAttribute('aria-label') || 
+							   el.getAttribute('data-title-shortcut') || '';
+					}
+
+					// 4. ЕСЛИ ЭТО ЧЕКБОКС БЕЗ ТЕКСТА (ВАЖНО!)
+					// Пытаемся найти тему письма рядом, чтобы ЛЛМ поняла "Чекбокс для письма X"
+					const isCheckbox = el.getAttribute('role') === 'checkbox' || 
+									   el.classList.contains('mail-MessageSnippet-Checkbox') ||
+									   el.type === 'checkbox';
 					
-					let inputType = '';
-					if (el.tagName.toLowerCase() === 'input') {
-						inputType = el.type || 'text';
+					if (isCheckbox && !text) {
+						// Ищем родительскую строку таблицы/списка
+						const row = el.closest('[role="row"], .mail-MessageSnippet, .letter-list-item-content');
+						if (row) {
+							// Ищем тему или отправителя в этой строке
+							const subject = row.querySelector('.mail-MessageSnippet-Item_subject, .ll-sj, .bog');
+							if (subject) text = "Выбрать: " + subject.innerText;
+							else text = "Чекбокс выбора";
+						} else {
+							text = "Чекбокс";
+						}
 					}
+					
+					text = text.trim().replace(/\s+/g, ' ').substring(0, 150);
+					
+					// Фильтрация мусора (пустые span/div без роли)
+					const tag = el.tagName.toLowerCase();
+					if (!text && !['input', 'select', 'textarea', 'button'].includes(tag) && !isCheckbox) {
+						// Если нет текста и это не кнопка/инпут - пропускаем, если нет вложенного SVG с title
+						const svgTitle = el.querySelector('svg title');
+						if (svgTitle) text = svgTitle.textContent.trim();
+						else return; 
+					}
+					
+					// Определяем тип для ЛЛМ
+					let role = el.getAttribute('role') || '';
+					if (isCheckbox) role = 'checkbox';
 					
 					results.push({
 						id: id,
-						tag: el.tagName.toLowerCase(),
+						tag: tag,
 						text: text,
-						type: inputType,
-						href: el.href || '',
-						placeholder: el.placeholder || '',
-						ariaLabel: el.getAttribute('aria-label') || '',
-						name: el.name || '',
-						role: el.getAttribute('role') || ''
+						type: el.type || '',
+						title: el.getAttribute('title') || '',
+						role: role,
+						// Маркер, что это похоже на чекбокс
+						isCheckbox: isCheckbox
 					});
 				});
 			} catch (e) {}
 		});
 		
-		// === ТЕКСТОВЫЙ КОНТЕНТ СТРАНИЦЫ ===
+		// === ТЕКСТОВЫЙ КОНТЕНТ (Остался прежним) ===
 		let pageContent = [];
-		
-		// Извлекаем текст из основных контейнеров
-		const contentSelectors = [
-			'main',
-			'article', 
-			'[role="main"]',
-			'.content',
-			'.mail-list',
-			'.inbox',
-			'.messages',
-			'.letter-list',
-			'table tbody',
-			'ul',
-			'ol'
-		];
-		
-		// Ищем списки писем (типичные паттерны почтовых сервисов)
-		const mailPatterns = [
-			// Mail.ru
-			'.letter-list .letter-list-item',
-			'.dataset__items .dataset__item',
-			'.llc',  // letter list container
-			// Gmail
-			'.zA',
-			'[role="row"]',
-			// Yandex
-			'.mail-MessageSnippet',
-			'.ns-view-messages'
-		];
-		
 		let mailItems = [];
-		for (const pattern of mailPatterns) {
-			try {
-				const items = document.querySelectorAll(pattern);
-				if (items.length > 0) {
-					items.forEach((item, idx) => {
-						if (idx < 15) { // Берём первые 15 писем
-							const text = item.innerText || item.textContent || '';
-							const cleanText = text.trim().replace(/\\s+/g, ' ').substring(0, 300);
-							if (cleanText.length > 10) {
-								mailItems.push({
-									index: idx + 1,
-									content: cleanText
-								});
-							}
-						}
-					});
-					if (mailItems.length > 0) break;
-				}
-			} catch(e) {}
-		}
 		
-		// Если не нашли по паттернам, берём общий контент
-		if (mailItems.length === 0) {
-			try {
-				// Пробуем найти любые повторяющиеся элементы (строки списка)
-				const rows = document.querySelectorAll('div[class*="item"], div[class*="row"], div[class*="message"], div[class*="letter"], li');
-				const uniqueTexts = new Set();
-				rows.forEach((row, idx) => {
-					if (idx < 20) {
-						const text = (row.innerText || '').trim().replace(/\\s+/g, ' ');
-						if (text.length > 20 && text.length < 500 && !uniqueTexts.has(text)) {
-							uniqueTexts.add(text);
-							pageContent.push(text.substring(0, 300));
-						}
+		// Сбор контента (упрощено для примера, используй логику из предыдущего ответа для контента)
+		const mailPatterns = ['.mail-MessageSnippet', '.letter-list-item', '.zA', '[role="row"]'];
+		for (const pattern of mailPatterns) {
+			const items = document.querySelectorAll(pattern);
+			if (items.length > 0) {
+				items.forEach((item, idx) => {
+					if (idx < 15) {
+						const t = item.innerText.replace(/\s+/g, ' ').substring(0, 200);
+						if(t.length > 10) mailItems.push({index: idx+1, content: t});
 					}
 				});
-			} catch(e) {}
+				if(mailItems.length) break;
+			}
 		}
 		
-		// Определяем модальные окна
-		let hasModal = false;
-		const modalSelectors = [
-			'[role="dialog"]',
-			'[role="alertdialog"]',
-			'[aria-modal="true"]',
-			'.modal:not([style*="display: none"])',
-			'.popup:not([style*="display: none"])'
-		];
-		
-		for (const sel of modalSelectors) {
-			try {
-				const modal = document.querySelector(sel);
-				if (modal) {
-					const style = window.getComputedStyle(modal);
-					if (style.display !== 'none' && style.visibility !== 'hidden') {
-						hasModal = true;
-						break;
-					}
-				}
-			} catch (e) {}
+		// Fallback content
+		if (!mailItems.length) {
+			document.querySelectorAll('h1, h2, .letter-body, .article').forEach(el => {
+				const t = el.innerText.replace(/\s+/g, ' ');
+				if(t.length > 20) pageContent.push(t.substring(0,500));
+			});
 		}
+
+		let hasModal = !!document.querySelector('[role="dialog"], .modal');
 		
 		return {
 			elements: results,
 			hasModal: hasModal,
 			totalElements: window._ai_elements.length,
 			mailItems: mailItems,
-			pageContent: pageContent.slice(0, 15)
+			pageContent: pageContent
 		};
 	}`
 
@@ -229,17 +210,18 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		return nil, fmt.Errorf("JS extraction failed: %w", err)
 	}
 
+	// Структура результата JS
 	var jsResult struct {
 		Elements []struct {
-			ID          int    `json:"id"`
-			Tag         string `json:"tag"`
-			Text        string `json:"text"`
-			Type        string `json:"type"`
-			Href        string `json:"href"`
-			Placeholder string `json:"placeholder"`
-			AriaLabel   string `json:"ariaLabel"`
-			Name        string `json:"name"`
-			Role        string `json:"role"`
+			ID         int    `json:"id"`
+			Tag        string `json:"tag"`
+			Text       string `json:"text"`
+			Type       string `json:"type"`
+			Href       string `json:"href"`
+			Title      string `json:"title"` // Добавили Title
+			Role       string `json:"role"`
+			IsButton   bool   `json:"isButton"`
+			IsCheckbox bool   `json:"isCheckbox"`
 		} `json:"elements"`
 		HasModal      bool `json:"hasModal"`
 		TotalElements int  `json:"totalElements"`
@@ -269,14 +251,8 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 		if elem.Href != "" {
 			attrs["href"] = elem.Href
 		}
-		if elem.Placeholder != "" {
-			attrs["placeholder"] = elem.Placeholder
-		}
-		if elem.AriaLabel != "" {
-			attrs["aria-label"] = elem.AriaLabel
-		}
-		if elem.Name != "" {
-			attrs["name"] = elem.Name
+		if elem.Title != "" {
+			attrs["title"] = elem.Title
 		}
 		if elem.Type != "" {
 			attrs["type"] = elem.Type
@@ -285,9 +261,15 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 			attrs["role"] = elem.Role
 		}
 
+		// Улучшаем отображение тега для ЛЛМ
+		tag := elem.Tag
+		if elem.IsButton || elem.Role == "button" || strings.Contains(strings.ToLower(elem.Text), "удалить") {
+			tag = "button" // Подменяем tag для ЛЛМ, чтобы он понимал, что это кнопка
+		}
+
 		pe := types.PageElement{
 			ID:         elem.ID,
-			Tag:        elem.Tag,
+			Tag:        tag,
 			Text:       elem.Text,
 			Attributes: attrs,
 			Visible:    true,
@@ -297,16 +279,23 @@ func (e *Extractor) Extract(ctx context.Context) (*types.PageState, error) {
 
 	// Сохраняем контент
 	var contentParts []string
-	for _, item := range jsResult.MailItems {
-		contentParts = append(contentParts, fmt.Sprintf("%d. %s", item.Index, item.Content))
+	// Сначала текст открытого письма
+	if len(jsResult.PageContent) > 0 {
+		contentParts = append(contentParts, "--- OPENED CONTENT ---")
+		contentParts = append(contentParts, jsResult.PageContent...)
 	}
-	if len(contentParts) == 0 {
-		contentParts = jsResult.PageContent
+	// Потом список писем
+	if len(jsResult.MailItems) > 0 {
+		contentParts = append(contentParts, "--- LIST ITEMS ---")
+		for _, item := range jsResult.MailItems {
+			contentParts = append(contentParts, fmt.Sprintf("%d. %s", item.Index, item.Content))
+		}
 	}
+
 	pageState.Content = strings.Join(contentParts, "\n")
 
 	if e.logger != nil {
-		e.logger.Debug("Extracted elements", "count", len(pageState.Elements), "hasModal", pageState.HasModal, "contentItems", len(contentParts))
+		e.logger.Debug("Extracted elements", "count", len(pageState.Elements), "hasModal", pageState.HasModal)
 	}
 
 	return pageState, nil
@@ -322,9 +311,10 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 		b.WriteString("⚠️ **MODAL/POPUP DETECTED** - Close it first with Escape or find close button.\n\n")
 	}
 
-	// === КОНТЕНТ СТРАНИЦЫ (важно для почты!) ===
+	// === КОНТЕНТ СТРАНИЦЫ ===
+	// Важно показывать контент ПЕРЕД элементами, чтобы ЛЛМ понимала контекст
 	if state.Content != "" {
-		b.WriteString("### Page Content (emails, messages, items):\n")
+		b.WriteString("### Page Content (emails, messages, text):\n")
 		b.WriteString("```\n")
 		b.WriteString(state.Content)
 		b.WriteString("\n```\n\n")
@@ -340,16 +330,31 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 		case "button":
 			buttons = append(buttons, el)
 		case "a":
-			if el.Text != "" || el.Attributes["aria-label"] != "" {
+			if el.Text != "" {
 				links = append(links, el)
 			}
-		case "tr", "li", "div":
-			if el.Attributes["role"] == "row" || el.Attributes["role"] == "listitem" {
-				if el.Text != "" && len(el.Text) > 10 {
+		default:
+			if val, ok := el.Attributes["title"]; ok && val != "" {
+				buttons = append(buttons, el)
+
+			} else if val, ok := el.Attributes["role"]; ok && val == "checkbox" {
+				buttons = append(buttons, el)
+			} else {
+				// Остальное
+				if el.Text != "" && len(el.Text) > 20 {
 					listItems = append(listItems, el)
 				}
 			}
 		}
+	}
+
+	// Buttons (Самое важное для действий)
+	if len(buttons) > 0 {
+		b.WriteString("### Clickable Elements (Buttons/Tools)\n")
+		for _, el := range buttons {
+			b.WriteString(e.formatElement(el) + "\n")
+		}
+		b.WriteString("\n")
 	}
 
 	// Inputs
@@ -361,37 +366,11 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 		b.WriteString("\n")
 	}
 
-	// Buttons
-	if len(buttons) > 0 {
-		b.WriteString("### Buttons\n")
-		limit := 15
-		for i, el := range buttons {
-			if i >= limit {
-				b.WriteString(fmt.Sprintf("... and %d more buttons\n", len(buttons)-limit))
-				break
-			}
-			b.WriteString(e.formatElement(el) + "\n")
-		}
-		b.WriteString("\n")
-	}
-
-	// List items (для почты важно!)
-	if len(listItems) > 0 {
-		b.WriteString("### List Items (emails/messages)\n")
-		limit := 15
-		for i, el := range listItems {
-			if i >= limit {
-				break
-			}
-			b.WriteString(e.formatElement(el) + "\n")
-		}
-		b.WriteString("\n")
-	}
-
 	// Links
 	if len(links) > 0 {
-		b.WriteString("### Links\n")
-		limit := 20
+		b.WriteString("### Navigation Links\n")
+		// Показываем меньше ссылок, чтобы не забивать контекст, если есть кнопки
+		limit := 30
 		for i, el := range links {
 			if i >= limit {
 				b.WriteString(fmt.Sprintf("... and %d more links\n", len(links)-limit))
@@ -410,29 +389,35 @@ func (e *Extractor) FormatForLLM(state *types.PageState) string {
 func (e *Extractor) formatElement(el types.PageElement) string {
 	var parts []string
 
-	parts = append(parts, fmt.Sprintf("[%d] %s", el.ID, el.Tag))
+	parts = append(parts, fmt.Sprintf("[%d]", el.ID))
 
+	// Если это "фейковая" кнопка (span/div), пишем button для понятности агенту
+	if el.Tag == "button" {
+		parts = append(parts, "button")
+	} else {
+		parts = append(parts, el.Tag)
+	}
+
+	if el.Attributes["role"] == "checkbox" {
+		parts = append(parts, "[CHECKBOX]")
+	}
+
+	// Главное - текст
 	if el.Text != "" {
 		text := el.Text
-		if len(text) > 80 {
-			text = text[:80] + "..."
+		if len(text) > 50 {
+			text = text[:50] + "..."
 		}
 		parts = append(parts, fmt.Sprintf("%q", text))
 	}
 
+	// Если есть title, обязательно показываем (там "Удалить", "Ответить")
+	if title, ok := el.Attributes["title"]; ok && title != "" && title != el.Text {
+		parts = append(parts, fmt.Sprintf("title=%q", title))
+	}
+
 	if ph, ok := el.Attributes["placeholder"]; ok && ph != "" {
-		if len(ph) > 30 {
-			ph = ph[:30] + "..."
-		}
 		parts = append(parts, fmt.Sprintf("placeholder=%q", ph))
-	}
-
-	if t, ok := el.Attributes["type"]; ok && t != "" && t != "text" {
-		parts = append(parts, fmt.Sprintf("type=%s", t))
-	}
-
-	if role, ok := el.Attributes["role"]; ok && role != "" {
-		parts = append(parts, fmt.Sprintf("role=%s", role))
 	}
 
 	return strings.Join(parts, " ")

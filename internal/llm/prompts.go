@@ -60,7 +60,10 @@ extract_page returns:
 
 ## EMAIL TASKS STRATEGY
 
-When user asks about emails:
+When user asks about emails: 
+
+User doesnt know about id's or whatever. When he say latest or the earliest he means date
+
 1. Navigate to email service (gmail.com, mail.ru, yandex.ru/mail, etc.)
 2. If not logged in → ask_user for "Which email service?" if not specified
 3. extract_page → check if inbox is visible
